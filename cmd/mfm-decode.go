@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/edorfaus/sb-mfm-decode"
 )
 
 func main() {
@@ -167,44 +169,16 @@ func (d *MfmDecoder) handleLeadIn() error {
 // the given noise floor. This returns the indexes of the input at which
 // edges (aka transitions) were detected.
 func EdgeDetect(input []int, noiseFloor int) []int {
-	// TODO: change this to a pull method that returns one edge? to let
+	// TODO: change the rest to use the EdgeDetect directly, to let
 	// the caller adjust parameters on the fly (e.g. glitch length), and
 	// to take less memory (both output and allowing >1 input blocks)?
 	var edges []int
-	// Find the first sample that is not within the noise floor.
-	noise := noiseFloor
-	i := 0
-	for i < len(input) && input[i] < noise && input[i] > -noise {
-		i++
-	}
-	if i >= len(input) {
-		// Input contains only noise, so no edges were found.
-		return edges
-	}
-	// TODO: if i == 0, should that be considered a valid edge?
-	edges = append(edges, i)
 
-	// Find any remaining edges.
-	prevSide := input[i] < 0
-	for i++; i < len(input); i++ {
-		v := input[i]
-		// Ignore samples that are within the noise floor
-		if v < noise && v > -noise {
-			// TODO: detect long sequences of only noise (end of block)?
-			// (maybe provide an "end-edge" where the noise starts? how
-			// does the encoding handle the last bit?)
-			continue
-		}
-		// Ignore samples that are on the same side of zero
-		if (v < 0) == prevSide {
-			continue
-		}
-		// We found a new edge
-		// TODO: check for and skip glitches here? or leave for later?
-		// TODO: place the edge at the sample that crossed 0, even if it
-		// ended up within the noise at first, and only later came out?
-		prevSide = v < 0
-		edges = append(edges, i)
+	ed := mfm.NewEdgeDetect(input, noiseFloor)
+	for ed.Next() {
+		// TODO: detect and skip glitches here? or within EdgeDetect?
+		// TODO: if index == 0, should that be considered a valid edge?
+		edges = append(edges, ed.CurIndex)
 	}
 
 	return edges
