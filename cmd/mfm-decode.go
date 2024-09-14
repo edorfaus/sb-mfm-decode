@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/edorfaus/sb-mfm-decode"
+	"github.com/edorfaus/sb-mfm-decode/mfm"
 )
 
 func main() {
