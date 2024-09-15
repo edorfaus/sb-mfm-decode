@@ -166,5 +166,15 @@ func (d *Decoder) NextBlock() error {
 		}
 	}
 
+	if d.Edge.CurType != EdgeToNone {
+		// This means d.Edge.Next() returned false, which means we're at
+		// the end of the input data. If we do not have any bits, that
+		// means we only got the first edge, which suggests a problem.
+		if len(d.Bits) == 0 {
+			return fmt.Errorf("bad data: only one edge before EOD")
+		}
+		return EOD
+	}
+
 	return nil
 }
