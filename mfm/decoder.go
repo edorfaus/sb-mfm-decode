@@ -55,6 +55,9 @@ func (d *Decoder) SetBitWidth(bitWidth int) {
 	if bitWidth < 2 {
 		panic(fmt.Errorf("invalid bit width: %v", bitWidth))
 	}
+	// TODO: should we use a weighted average of recent bit widths?
+	// If so, should we change it to be a float, for higher precision?
+	// If so, we might need another float field for current position.
 	d.BitWidth = bitWidth
 	// TODO: figure out what would be a good value for this
 	d.Edge.MaxCrossingTime = bitWidth / 2

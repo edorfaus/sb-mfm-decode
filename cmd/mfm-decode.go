@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -15,171 +16,84 @@ func main() {
 }
 
 func run() error {
-	samples := []int{0, 1000, 1000, -1000}
-	edges := EdgeDetect(samples, 32768*2/100)
-	fmt.Println("edges:", edges)
-	d := &MfmDecoder{Edges: edges}
-	if err := d.DecodeChunk(); err != nil {
-		return err
+	samples := buildSamples(
+		1, 1, // leading none
+		2, 2, 0, 0, 2, 2, 2, 0, 0, 2, 2, 0, 0, 2, 2,
+		1, 1, // trailing none
+	)
+	fmt.Println("Samples:", len(samples))
+	//fmt.Println("   ", samples)
+	ed := mfm.NewEdgeDetect(samples, 32768*2/100)
+	d := mfm.NewDecoder(ed)
+
+	for {
+		err := d.NextBlock()
+		if err != nil && !errors.Is(err, mfm.EOD) {
+			fmt.Printf(
+				"failed block: start %v, end %v, bit width %v: %v\n",
+				d.StartIndex, d.EndIndex, d.BitWidth, d.Bits,
+			)
+			return err
+		}
+		if len(d.Bits) == 0 {
+			fmt.Printf(
+				"empty block: start %v, end %v, bit width %v: %v\n",
+				d.StartIndex, d.EndIndex, d.BitWidth, d.Bits,
+			)
+			if err != nil {
+				return nil
+			}
+			continue
+		}
+		bits, liErr := skipLeadIn(d.Bits)
+		fmt.Printf(
+			"block: start %v, end %v, bit width %v, lead-in %v: %v\n",
+			d.StartIndex, d.EndIndex, d.BitWidth,
+			len(d.Bits)-len(bits), bits,
+		)
+		//fmt.Println("  All bits:", d.Bits)
+		if liErr != nil {
+			fmt.Println("  Warning:", liErr)
+		}
+		if err != nil {
+			return nil
+		}
 	}
-	fmt.Println("bits:", d.Bits)
-	return nil
+}
+
+func buildSamples(halfBits ...int) []int {
+	const halfBitWidth = 4
+	const scale = 16384
+	out := make([]int, 0, len(halfBits)*halfBitWidth)
+	for _, v := range halfBits {
+		for i := 0; i < halfBitWidth; i++ {
+			out = append(out, (v-1)*scale)
+		}
+	}
+	return out
 }
 
 // In studybox, after the MFM lead-in (0s then 1), there's a 0-bit
 // before each byte of data. So, more or less, each byte takes 9 bits.
 
-type MfmDecoder struct {
-	Edges   []int
-	curEdge int
-
-	// bitSize is the sample size of each bit.
-	// TODO: replace this with an array to get a rolling average, to
-	// better handle variation due to sample rate not matching the MFM.
-	bitSize int
-
-	// Bits is the bits in the currently decoded chunk.
-	Bits []byte
-}
-
-func (d *MfmDecoder) DecodeChunk() error {
-	if err := d.handleLeadIn(); err != nil {
-		return fmt.Errorf("MFM lead-in: %w", err)
-	}
-	// d.curEdge is now pointing to the 1-bit at the end of the lead-in.
-	if err := d.decodeData(); err != nil {
-		return fmt.Errorf("MFM data: %w", err)
-	}
-	return nil
-}
-
-func (d *MfmDecoder) decodeData() error {
-	edges := d.Edges
-	bitSize := d.bitSize
-	bits := d.Bits[:0]
-	prevBit := 0
-	for i := d.curEdge + 1; i < len(edges); i++ {
-		dist := edges[i] - edges[i-1]
-		// The distance between edges should be 2, 3 or 4 times bitSize.
-		// If it is significantly larger, that means we hit the end.
-		// So, try to classify the distance into one of those buckets,
-		// while allowing some variance in the actual distance.
-		// We can't just use a simple divide since we want some rounding
-		// and accept larger buckets at either end.
-		// We use this equiv: a > b*2.5 => a > b*25/10 => a * 10 > b*25
-		var group int
-		switch {
-		case dist*10 > bitSize*45:
-			// It's larger than 4, check if it's large enough that we
-			// consider it to be the end of the data.
-			if dist < bitSize*10 {
-				return fmt.Errorf("edge distance too large before EOD")
-			}
-			// End of data found
-			d.Bits = bits
-			d.bitSize = bitSize
-			d.curEdge = i
-			return nil
-		case dist*10 > bitSize*35:
-			group = 4
-		case dist*10 > bitSize*25:
-			group = 3
-		case dist*10 > bitSize*15:
-			group = 2
-		default:
-			return fmt.Errorf("edge distance too short")
-		}
-		if prevBit == 0 {
-			// TODO
-			switch group {
-			case 2:
-			case 3:
-			case 4:
-			}
-		} else {
-			// prevBit == 1
-			// TODO
-			switch group {
-			case 2:
-			case 3:
-			case 4:
-			}
-		}
-	}
-	return fmt.Errorf("ran off the end of the edges")
-}
-
-func (d *MfmDecoder) handleLeadIn() error {
-	edges := d.Edges
-	if len(edges) < 2 {
-		d.curEdge = len(edges)
-		return fmt.Errorf("too few edges in input")
-	}
-
+func skipLeadIn(bits []byte) ([]byte, error) {
 	// The lead-in is a data sequence of 0s followed by a single 1.
 	// Adding the clock, each data bit gets expanded into 2 stored bits,
 	// such that the lead-in becomes a sequence of 10 followed by a 01,
-	// like this: 101010...101001. Each 1-bit is encoded as an edge,
-	// while each 0-bit is encoded as no edge. Thus, for most of the
-	// lead-in, there are exactly 2 bits between each pair of edges,
-	// which allows us to calculate the size in samples of each bit.
-	// Then, the end of the lead-in can be detected by there being two
-	// edges with a distance of 3 bits.
+	// like this: 101010...101001.
 
-	twoBitSize := edges[1] - edges[0]
-	for i := 2; i < len(edges); i++ {
-		size := edges[i] - edges[i-1]
-		if size < twoBitSize {
-			// TODO: handle glitches here? or earlier in edge detection?
-			twoBitSize = size
-			continue
-		}
-		if size > twoBitSize {
-			// Check for end of lead-in (distance of 3 bits).
-			// To allow for some variability in the sampling speed, we
-			// set the cut-off point at 2.5 bits.
-			// (twoBitSize/2)*2.5 = (twoBitSize/2)*25/10
-			// = twoBitSize*25/(2*10) = twoBitSize*25/20
-			// = twoBitSize*5/4
-			if size < twoBitSize*5/4 {
-				twoBitSize = size
-				continue
-			}
-			// If the distance is more than 3 bits then we probably
-			// have bad input; again we allow for some variability by
-			// putting the cut-off point at 3.5 bits.
-			// Similarly to above, (twoBitSize/2)*3.5 = twoBitSize*7/4
-			if size > twoBitSize*7/4 {
-				d.curEdge = i
-				return fmt.Errorf("bad input: bit distance too long")
-			}
-
-			// We found the end of the lead-in.
-			d.curEdge = i
-			d.bitSize = twoBitSize / 2
-			return nil
-		}
+	i := 0
+	for i+1 < len(bits) && bits[i] == 1 && bits[i+1] == 0 {
+		i += 2
 	}
 
-	d.curEdge = len(edges)
-	return fmt.Errorf("bad input: lead-in ran off end of data")
-}
-
-// Detect edges in the input samples, ignoring samples that are within
-// the given noise floor. This returns the indexes of the input at which
-// edges (aka transitions) were detected.
-func EdgeDetect(input []int, noiseFloor int) []int {
-	// TODO: change the rest to use the EdgeDetect directly, to let
-	// the caller adjust parameters on the fly (e.g. glitch length), and
-	// to take less memory (both output and allowing >1 input blocks)?
-	var edges []int
-
-	ed := mfm.NewEdgeDetect(input, noiseFloor)
-	for ed.Next() {
-		// TODO: detect and skip glitches here? or within EdgeDetect?
-		// TODO: if index == 0, should that be considered a valid edge?
-		edges = append(edges, ed.CurIndex)
+	if i == 0 {
+		return bits, fmt.Errorf("lead-in: no lead-in found")
 	}
 
-	return edges
+	if i+1 >= len(bits) || bits[i] != 0 || bits[i+1] != 1 {
+		return bits, fmt.Errorf("lead-in: end marker not found")
+	}
+
+	return bits[i+2:], nil
 }
