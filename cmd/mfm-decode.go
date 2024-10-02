@@ -26,23 +26,13 @@ func run() error {
 	ed := mfm.NewEdgeDetect(samples, 32768*2/100)
 	d := mfm.NewDecoder(ed)
 
-	for {
-		err := d.NextBlock()
-		if err != nil && !errors.Is(err, mfm.EOD) {
-			fmt.Printf(
-				"failed block: start %v, end %v, bit width %v: %v\n",
-				d.StartIndex, d.EndIndex, d.BitWidth, d.Bits,
-			)
-			return err
-		}
+	err := d.NextBlock()
+	for ; err == nil; err = d.NextBlock() {
 		if len(d.Bits) == 0 {
 			fmt.Printf(
 				"empty block: start %v, end %v, bit width %v: %v\n",
 				d.StartIndex, d.EndIndex, d.BitWidth, d.Bits,
 			)
-			if err != nil {
-				return nil
-			}
 			continue
 		}
 		bits, liErr := skipLeadIn(d.Bits)
@@ -55,10 +45,25 @@ func run() error {
 		if liErr != nil {
 			fmt.Println("  Warning:", liErr)
 		}
-		if err != nil {
-			return nil
-		}
 	}
+
+	if len(d.Bits) != 0 && errors.Is(err, mfm.EOD) {
+		// This should never happen, as long as the decoder works.
+		err = fmt.Errorf("EOD block contains data")
+	}
+	if !errors.Is(err, mfm.EOD) {
+		fmt.Printf(
+			"failed block: start %v, end %v, bit width %v: %v\n",
+			d.StartIndex, d.EndIndex, d.BitWidth, d.Bits,
+		)
+		return err
+	}
+
+	fmt.Printf(
+		"EOD block: start %v, end %v, bit width %v\n",
+		d.StartIndex, d.EndIndex, d.BitWidth,
+	)
+	return nil
 }
 
 func buildSamples(halfBits ...int) []int {

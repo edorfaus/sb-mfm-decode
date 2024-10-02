@@ -8,8 +8,17 @@ const (
 	EdgeToLow
 )
 
+// This edge detector assumes that there is nothing outside of the given
+// samples; that is, that both before and after the given samples, there
+// is an infinitude of samples that are neither high nor low. This means
+// that if the given samples have high or low values at either end, then
+// that end will be considered to be an edge.
+
+// TODO: on EdgeToNone, go back to 1st 0-pt: long tail edge = bad data
+
 // TODO: handle DC offsets
 // TODO: add minimum pulse length or something to avoid glitches?
+// TODO: add float interpolation of edge's zero crossing point?
 
 type EdgeDetect struct {
 	// The list of samples that this edge detector is finding edges in.
@@ -45,6 +54,14 @@ func (e *EdgeDetect) Next() bool {
 	i := e.CurIndex
 	s := e.Samples
 	noise := e.NoiseFloor
+
+	if i >= len(s) {
+		// We are already past the end of the data, so there are no more
+		// edges to be found.
+		e.CurType = EdgeToNone
+		return false
+	}
+
 	if e.CurType == EdgeToNone {
 		// Previous was none, so find either high or low.
 		for i < len(s) && s[i] <= noise && s[i] >= -noise {
@@ -68,9 +85,6 @@ func (e *EdgeDetect) Next() bool {
 	}
 
 	// Previous was high or low, so find either the opposite or none.
-	if i >= len(s) {
-		return false
-	}
 
 	// Look for the first non-noise sample on the other side of 0.
 	// Note that this ignores dips into noise that come back out on the
@@ -98,9 +112,13 @@ func (e *EdgeDetect) Next() bool {
 		}
 		e.CurIndex = i
 		if i >= len(s) {
-			// No edge was found.
-			// TODO: check for a short ToNone edge? do we even want it?
-			return false
+			// No edge was found before the end, so this goes to none.
+			e.CurType = EdgeToNone
+			if s[i-1] >= -noise {
+				// TODO: look back for the first nearest-0 point, as if
+				// we hit the MaxCrossingTime.
+			}
+			return true
 		}
 		// TODO: look backwards for the point where it crosses zero?
 		e.CurType = EdgeToHigh
@@ -125,9 +143,13 @@ func (e *EdgeDetect) Next() bool {
 	}
 	e.CurIndex = i
 	if i >= len(s) {
-		// No edge was found.
-		// TODO: check for a short ToNone edge? do we even want it?
-		return false
+		// No edge was found before the end, so this goes to none.
+		e.CurType = EdgeToNone
+		if s[i-1] <= noise {
+			// TODO: look back for the first nearest-0 point, as if
+			// we hit the MaxCrossingTime.
+		}
+		return true
 	}
 	// TODO: look backwards for the point where it crosses zero?
 	e.CurType = EdgeToLow

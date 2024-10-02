@@ -116,8 +116,9 @@ func (d *Decoder) NextBlock() error {
 		// lead-in must start with at least one 0-bit, so grab it and
 		// use its timing as the initial bit width.
 		if !d.Edge.Next() {
-			// The data only contains one edge; there's no data here.
-			return fmt.Errorf("bad data: only one edge before EOD")
+			// This should never happen, as the edge detector always
+			// returns a final EdgeToNone after any other edge.
+			return fmt.Errorf("edge detector gave only one edge")
 		}
 		d.SetBitWidth(d.Edge.CurIndex - d.Edge.PrevIndex)
 		d.Bits = append(d.Bits, 1, 0)
@@ -127,7 +128,6 @@ func (d *Decoder) NextBlock() error {
 	// TODO: should the last edge (to none) be included in the data?
 	for d.Edge.CurType != EdgeToNone && d.Edge.Next() {
 		delta := d.Edge.CurIndex - d.Edge.PrevIndex
-		// The below comparisons all use delta*4, so do that only once.
 		switch {
 		case delta*4 < d.BitWidth*3:
 			// TODO: do I want to handle glitches here or in EdgeDetect?
@@ -170,13 +170,9 @@ func (d *Decoder) NextBlock() error {
 	}
 
 	if d.Edge.CurType != EdgeToNone {
-		// This means d.Edge.Next() returned false, which means we're at
-		// the end of the input data. If we do not have any bits, that
-		// means we only got the first edge, which suggests a problem.
-		if len(d.Bits) == 0 {
-			return fmt.Errorf("bad data: only one edge before EOD")
-		}
-		return EOD
+		// This means d.Edge.Next() returned false without a final edge
+		// to none, which should never happen with a working detector.
+		return fmt.Errorf("edge detector did not end with EdgeToNone")
 	}
 
 	return nil
