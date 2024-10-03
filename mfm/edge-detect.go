@@ -51,107 +51,128 @@ func NewEdgeDetect(samples []int, noiseFloor int) *EdgeDetect {
 
 func (e *EdgeDetect) Next() bool {
 	e.PrevIndex, e.PrevType = e.CurIndex, e.CurType
-	i := e.CurIndex
-	s := e.Samples
-	noise := e.NoiseFloor
 
-	if i >= len(s) {
+	if e.CurIndex >= len(e.Samples) {
 		// We are already past the end of the data, so there are no more
 		// edges to be found.
 		e.CurType = EdgeToNone
 		return false
 	}
 
-	if e.CurType == EdgeToNone {
-		// Previous was none, so find either high or low.
-		for i < len(s) && s[i] <= noise && s[i] >= -noise {
-			i++
-		}
-		// TODO: check if it immediately drops back into noise (glitch)?
-		// (even if only to match the behaviour when going into noise.)
-		// TODO: look backwards for the point where it started to rise?
-		// (to match detection of zero-crossing, if/when that is added.)
-		e.CurIndex = i
-		if i >= len(s) {
-			e.CurType = EdgeToNone
-			return false
-		}
-		if s[i] > noise {
-			e.CurType = EdgeToHigh
-		} else {
-			e.CurType = EdgeToLow
-		}
-		return true
+	switch e.CurType {
+	case EdgeToNone:
+		return e.nextFromNone()
+	case EdgeToLow:
+		return e.nextFromLow()
+	case EdgeToHigh:
+		return e.nextFromHigh()
 	}
 
-	// Previous was high or low, so find either the opposite or none.
+	panic("bad state: unknown value in EdgeDetect.CurType")
+}
 
-	// Look for the first non-noise sample on the other side of 0.
-	// Note that this ignores dips into noise that come back out on the
-	// same side as before, unless one is long enough to be EdgeToNone.
+// nextFromNone is called by Next to find an edge (or EOD) from a none.
+func (e *EdgeDetect) nextFromNone() bool {
+	i, s, noise := e.CurIndex, e.Samples, e.NoiseFloor
 
+	// Look for the first non-noise sample on either side of zero.
+	for i < len(s) && s[i] <= noise && s[i] >= -noise {
+		i++
+	}
+	// TODO: check if it immediately drops back into noise (glitch)?
+	// (even if only to match the behaviour when going into noise.)
+
+	e.CurIndex = i
+	if i >= len(s) {
+		e.CurType = EdgeToNone
+		return false
+	}
+
+	// TODO: look backwards for the point where it started to rise
+	// (to match detection of zero-crossing, when that is added.)
+
+	if s[i] > noise {
+		e.CurType = EdgeToHigh
+	} else {
+		e.CurType = EdgeToLow
+	}
+	return true
+}
+
+// nextFromLow is called by Next to find a high (or none) from a low.
+func (e *EdgeDetect) nextFromLow() bool {
+	i, s, noise := e.CurIndex, e.Samples, e.NoiseFloor
 	maxTime := e.MaxCrossingTime
 	t := maxTime
 
-	if s[i] < 0 {
-		// We are low, so look for an edge to high (or none).
-		for i++; i < len(s) && s[i] <= noise; i++ {
-			// Check for too many within-noise samples.
-			if s[i] < -noise {
-				t = maxTime
-			} else {
-				t--
-				if t < 0 {
-					// Too many within-noise, this is an edge to none.
-					// TODO: look back for the first nearest-0 point?
-					e.CurType = EdgeToNone
-					e.CurIndex = i
-					return true
-				}
+	// Look for the first non-noise sample on the other side of zero.
+	// Note that this ignores dips into noise that come back out on the
+	// same side as before, unless one is long enough to be EdgeToNone.
+	for i++; i < len(s) && s[i] <= noise; i++ {
+		// Check for too many consecutive within-noise samples.
+		if s[i] < -noise {
+			t = maxTime
+		} else {
+			t--
+			if t < 0 {
+				break
 			}
 		}
-		e.CurIndex = i
-		if i >= len(s) {
-			// No edge was found before the end, so this goes to none.
-			e.CurType = EdgeToNone
-			if s[i-1] >= -noise {
-				// TODO: look back for the first nearest-0 point, as if
-				// we hit the MaxCrossingTime.
-			}
-			return true
+	}
+
+	e.CurIndex = i
+	if i >= len(s) || t < 0 {
+		// No edge was found before the end, or there were too many
+		// consecutive within-noise samples, so this is an edge to none.
+		e.CurType = EdgeToNone
+		if t != maxTime {
+			// The previous sample was within the noise, so look back
+			// for the first nearest-0 point, to place the edge there.
+			// TODO: implement the above comment
 		}
-		// TODO: look backwards for the point where it crosses zero?
-		e.CurType = EdgeToHigh
 		return true
 	}
 
-	// We are high, so look for an edge to low (or none).
+	// TODO: look backwards for the point where it crosses zero
+	e.CurType = EdgeToHigh
+	return true
+}
+
+// nextFromHigh is called by Next to find a low (or none) from a high.
+func (e *EdgeDetect) nextFromHigh() bool {
+	i, s, noise := e.CurIndex, e.Samples, e.NoiseFloor
+	maxTime := e.MaxCrossingTime
+	t := maxTime
+
+	// Look for the first non-noise sample on the other side of zero.
+	// Note that this ignores dips into noise that come back out on the
+	// same side as before, unless one is long enough to be EdgeToNone.
 	for i++; i < len(s) && s[i] >= -noise; i++ {
-		// Check for too many within-noise samples.
+		// Check for too many consecutive within-noise samples.
 		if s[i] > noise {
 			t = maxTime
 		} else {
 			t--
 			if t < 0 {
-				// Too many within-noise, this is an edge to none.
-				// TODO: look back for the first nearest-0 point?
-				e.CurType = EdgeToNone
-				e.CurIndex = i
-				return true
+				break
 			}
 		}
 	}
+
 	e.CurIndex = i
-	if i >= len(s) {
-		// No edge was found before the end, so this goes to none.
+	if i >= len(s) || t < 0 {
+		// No edge was found before the end, or there were too many
+		// consecutive within-noise samples, so this is an edge to none.
 		e.CurType = EdgeToNone
-		if s[i-1] <= noise {
-			// TODO: look back for the first nearest-0 point, as if
-			// we hit the MaxCrossingTime.
+		if t != maxTime {
+			// The previous sample was within the noise, so look back
+			// for the first nearest-0 point, to place the edge there.
+			// TODO: implement the above comment
 		}
 		return true
 	}
-	// TODO: look backwards for the point where it crosses zero?
+
+	// TODO: look backwards for the point where it crosses zero
 	e.CurType = EdgeToLow
 	return true
 }
