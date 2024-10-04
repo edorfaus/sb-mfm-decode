@@ -47,16 +47,22 @@ func run() error {
 
 	type d = time.Duration
 	fmt.Printf(
-		"Input: %v %v-bit samples at %v Hz: %v\n",
+		"Input: %v %v-bit samples at %v Hz = %v\n",
 		len(samples), bits, rate, d(len(samples))*time.Second/d(rate),
 	)
 
+	start := time.Now()
 	output, err := processSamples(samples, rate, bits)
+	fmt.Println("Processing done in", time.Since(start))
 	if err != nil {
 		return err
 	}
 
-	if err := saveSamples(outf, output, rate, bits); err != nil {
+	start = time.Now()
+	fmt.Print("Saving output...")
+	err = saveSamples(outf, output, rate, bits)
+	fmt.Println(" done in", time.Since(start))
+	if err != nil {
 		return err
 	}
 
@@ -138,18 +144,46 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 }
 
 func loadSamples(filename string) (_ []int, rate, bits int, _ error) {
+	fmt.Print("Reading: ", filename, " ...")
+	start := time.Now()
 	fileData, err := os.ReadFile(filename)
+	fmt.Println(" done in", time.Since(start))
 	if err != nil {
 		return nil, 0, 0, err
 	}
 
+	fmt.Println("Decoding...")
+	start = time.Now()
 	d := wav.NewDecoder(bytes.NewReader(fileData))
 
-	// TODO: replace FullPCMBuffer with a better way to load the data.
-	buf, err := d.FullPCMBuffer()
+	if err := d.FwdToPCM(); err != nil {
+		return nil, 0, 0, err
+	}
+
+	if d.BitDepth < 8 || d.BitDepth > 64 || d.BitDepth%8 != 0 {
+		return nil, 0, 0, fmt.Errorf("bad bit depth: %v", d.BitDepth)
+	}
+	expectedSamples := int(d.PCMLen() / int64(d.BitDepth/8))
+	//fmt.Println("Expected samples:", expectedSamples)
+
+	// +1 just in case our calculation isn't quite right.
+	buf := &audio.IntBuffer{
+		Data: make([]int, expectedSamples+1),
+	}
+	n, err := d.PCMBuffer(buf)
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	buf.Data = buf.Data[:n]
+	//fmt.Println("     Got samples:", n)
+	fmt.Println("Decoding done in", time.Since(start))
+	if n > expectedSamples {
+		fmt.Println("Warning: unexpected sample, may have lost some")
+	}
+	if n < expectedSamples {
+		fmt.Println("Warning: got fewer samples than expected")
+	}
+
 	if err := d.Err(); err != nil {
 		return nil, 0, 0, err
 	}
@@ -164,6 +198,8 @@ func loadSamples(filename string) (_ []int, rate, bits int, _ error) {
 		data = buf.Data
 	} else {
 		// Multiple channels, keep the second one (right, if stereo).
+		fmt.Print("Extracting second channel...")
+		start := time.Now()
 
 		// Make a new buffer so we can release the oversized one.
 		data = make([]int, buf.NumFrames())
@@ -172,6 +208,7 @@ func loadSamples(filename string) (_ []int, rate, bits int, _ error) {
 		for i, j := 0, 1; i < len(data); i, j = i+1, j+channels {
 			data[i] = buf.Data[j]
 		}
+		fmt.Println(" done in", time.Since(start))
 	}
 
 	return data, buf.Format.SampleRate, buf.SourceBitDepth, nil
