@@ -7,13 +7,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/alexflint/go-arg"
 	"github.com/go-audio/audio"
 	"github.com/go-audio/wav"
 
 	"github.com/edorfaus/sb-mfm-decode/mfm"
 )
-
-const printStats = true
 
 func main() {
 	if err := run(); err != nil {
@@ -22,28 +21,20 @@ func main() {
 	}
 }
 
-func args() (in, out string, err error) {
-	if len(os.Args) > 1 {
-		in = os.Args[1]
-	} else {
-		fmt.Fprintln(os.Stderr, "Usage: wav-edges <in.wav> [out.wav]")
-		err = fmt.Errorf("missing input filename argument")
-	}
-	if len(os.Args) > 2 {
-		out = os.Args[2]
-	} else {
-		out = "out.wav"
-	}
-	return
+var args = struct {
+	Stats  bool   `help:"print some statistics"`
+	Input  string `arg:"positional,required" help:"input wav file"`
+	Output string `arg:"positional" help:"output wav file [out.wav]"`
+	// TODO: remove default value text from above help text, when go-arg
+	// is updated to a newer version with the fix for auto-printing it.
+}{
+	Output: "out.wav",
 }
 
 func run() error {
-	inf, outf, err := args()
-	if err != nil {
-		return err
-	}
+	arg.MustParse(&args)
 
-	samples, rate, bits, err := loadSamples(inf)
+	samples, rate, bits, err := loadSamples(args.Input)
 	if err != nil {
 		return err
 	}
@@ -62,8 +53,8 @@ func run() error {
 	}
 
 	start = time.Now()
-	fmt.Print("Saving output...")
-	err = saveSamples(outf, output, rate, bits)
+	fmt.Printf("Writing: %v ...", args.Output)
+	err = saveSamples(args.Output, output, rate, bits)
 	fmt.Println(" done in", time.Since(start))
 	if err != nil {
 		return err
@@ -155,7 +146,7 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 
 	fmt.Println("Edges found:", edges)
 
-	if !printStats {
+	if !args.Stats {
 		return output, nil
 	}
 
