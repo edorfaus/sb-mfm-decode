@@ -27,8 +27,14 @@ var args = struct {
 	Output string `arg:"positional" help:"output wav file [out.wav]"`
 	// TODO: remove default value text from above help text, when go-arg
 	// is updated to a newer version with the fix for auto-printing it.
+
+	NoiseFloor      int `help:"noise floor; -1 means use 2% of max"`
+	MaxCrossingTime int `help:"max samples for 0-crossing before None"`
 }{
 	Output: "out.wav",
+
+	NoiseFloor:      -1,
+	MaxCrossingTime: -1,
 }
 
 func run() error {
@@ -44,6 +50,17 @@ func run() error {
 		"Input: %v %v-bit samples at %v Hz = %v\n",
 		len(samples), bits, rate, d(len(samples))*time.Second/d(rate),
 	)
+
+	if args.Stats {
+		h, l := samples[0], samples[0]
+		for _, v := range samples {
+			h = max(h, v)
+			if v < l {
+				l = v
+			}
+		}
+		fmt.Printf("Min sample: %v, max: %v\n", l, h)
+	}
 
 	start := time.Now()
 	output, err := processSamples(samples, rate, bits)
@@ -65,12 +82,23 @@ func run() error {
 
 func processSamples(samples []int, rate, bits int) ([]int, error) {
 	// For now, we set the noise floor at 2% of the max value.
-	ed := mfm.NewEdgeDetect(samples, (1<<(bits-1))*2/100)
+	noiseFloor := (1 << (bits - 1)) * 2 / 100
+	// ... unless overridden by the arguments.
+	if args.NoiseFloor >= 0 {
+		noiseFloor = args.NoiseFloor
+	}
 
-	// Use an MFM decoder temporarily, purely to get the same value as
+	ed := mfm.NewEdgeDetect(samples, noiseFloor)
+
+	// If a max crossing time was given, use it as-is. Otherwise, we
+	// use an MFM decoder temporarily, purely to get the same value as
 	// it would initialize MaxCrossingTime to for a given sampling rate.
 	// TODO: improve this, maybe make a non-method func for it?
-	mfm.NewDecoder(ed).InitFreq(mfm.DefaultBitRate, rate)
+	if args.MaxCrossingTime < 0 {
+		mfm.NewDecoder(ed).InitFreq(mfm.DefaultBitRate, rate)
+	} else {
+		ed.MaxCrossingTime = args.MaxCrossingTime
+	}
 
 	fmt.Printf(
 		"Noise floor: %v, max crossing time: %v\n",
