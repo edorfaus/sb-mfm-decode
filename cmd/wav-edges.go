@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/go-audio/audio"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/edorfaus/sb-mfm-decode/mfm"
 )
+
+const printStats = true
 
 func main() {
 	if err := run(); err != nil {
@@ -89,16 +92,28 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 	// For simplicity, put the high and low values at 1/2 max amplitude.
 	high := 1 << (bits - 2)
 
+	// For statistics
+	durCountAll := map[int]int{}
+	durCountHigh := map[int]int{}
+	durCountLow := map[int]int{}
+	durCountNone := map[int]int{}
+
 	fillFrom := 0
 	fill := func(edge mfm.EdgeType, from, to int) error {
+		duration := to - from
+		durCountAll[duration]++
+
 		val := 0
 		switch edge {
 		case mfm.EdgeToHigh:
 			val = high
+			durCountHigh[duration]++
 		case mfm.EdgeToLow:
 			val = -high
+			durCountLow[duration]++
 		case mfm.EdgeToNone:
 			val = 0
+			durCountNone[duration]++
 		default:
 			return fmt.Errorf("unknown edge type: %v", edge)
 		}
@@ -140,7 +155,51 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 
 	fmt.Println("Edges found:", edges)
 
+	if !printStats {
+		return output, nil
+	}
+
+	// Print some statistics
+	keys := make([]int, 0, len(durCountAll))
+	maxCount := 0
+	for k, v := range durCountAll {
+		keys = append(keys, k)
+		if v > maxCount {
+			maxCount = v
+		}
+	}
+	sort.Ints(keys)
+	// This is safe because there's always at least one duration count.
+	ksz := max(5, len(fmt.Sprintf("%v", keys[len(keys)-1])))
+	vsz := max(5, len(fmt.Sprintf("%v", maxCount)))
+	fmt.Printf(
+		"%*s %*s %*s %*s %*s\n",
+		ksz, "Width", vsz, "High", vsz, "Low", vsz, "None", vsz, "Total",
+	)
+	for _, k := range keys {
+		fmt.Printf(
+			"%*v %*v %*v %*v %*v\n",
+			ksz, k, vsz, durCountHigh[k], vsz, durCountLow[k],
+			vsz, durCountNone[k], vsz, durCountAll[k],
+		)
+	}
+
+	wsz := max(5, len(fmt.Sprintf("%v", len(durCountAll))))
+	fmt.Printf(
+		"Distinct widths:\n%*s %*s %*s %*s\n%*v %*v %*v %*v\n",
+		wsz, "High", wsz, "Low", wsz, "None", wsz, "Total",
+		wsz, len(durCountHigh), wsz, len(durCountLow),
+		wsz, len(durCountNone), wsz, len(durCountAll),
+	)
+
 	return output, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func loadSamples(filename string) (_ []int, rate, bits int, _ error) {
