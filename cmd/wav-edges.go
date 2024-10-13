@@ -1,17 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"sort"
 	"time"
 
 	"github.com/alexflint/go-arg"
-	"github.com/go-audio/audio"
-	"github.com/go-audio/wav"
 
 	"github.com/edorfaus/sb-mfm-decode/mfm"
+	"github.com/edorfaus/sb-mfm-decode/wav"
 )
 
 func main() {
@@ -40,10 +38,11 @@ var args = struct {
 func run() error {
 	arg.MustParse(&args)
 
-	samples, rate, bits, err := loadSamples(args.Input)
+	samples, meta, err := wav.LoadDataChannel(args.Input)
 	if err != nil {
 		return err
 	}
+	rate, bits := meta.SampleRate, meta.BitDepth
 
 	type d = time.Duration
 	fmt.Printf(
@@ -69,10 +68,7 @@ func run() error {
 		return err
 	}
 
-	start = time.Now()
-	fmt.Printf("Writing: %v ...", args.Output)
-	err = saveSamples(args.Output, output, rate, bits)
-	fmt.Println(" done in", time.Since(start))
+	err = wav.SaveMono(args.Output, output, rate, bits)
 	if err != nil {
 		return err
 	}
@@ -219,109 +215,4 @@ func max(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func loadSamples(filename string) (_ []int, rate, bits int, _ error) {
-	fmt.Print("Reading: ", filename, " ...")
-	start := time.Now()
-	fileData, err := os.ReadFile(filename)
-	fmt.Println(" done in", time.Since(start))
-	if err != nil {
-		return nil, 0, 0, err
-	}
-
-	fmt.Println("Decoding...")
-	start = time.Now()
-	d := wav.NewDecoder(bytes.NewReader(fileData))
-
-	if err := d.FwdToPCM(); err != nil {
-		return nil, 0, 0, err
-	}
-
-	if d.BitDepth < 8 || d.BitDepth > 64 || d.BitDepth%8 != 0 {
-		return nil, 0, 0, fmt.Errorf("bad bit depth: %v", d.BitDepth)
-	}
-	expectedSamples := int(d.PCMLen() / int64(d.BitDepth/8))
-	//fmt.Println("Expected samples:", expectedSamples)
-
-	// +1 just in case our calculation isn't quite right.
-	buf := &audio.IntBuffer{
-		Data: make([]int, expectedSamples+1),
-	}
-	n, err := d.PCMBuffer(buf)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	buf.Data = buf.Data[:n]
-	//fmt.Println("     Got samples:", n)
-	fmt.Println("Decoding done in", time.Since(start))
-	if n > expectedSamples {
-		fmt.Println("Warning: unexpected sample, may have lost some")
-	}
-	if n < expectedSamples {
-		fmt.Println("Warning: got fewer samples than expected")
-	}
-
-	if err := d.Err(); err != nil {
-		return nil, 0, 0, err
-	}
-
-	if buf.Format == nil || buf.Format.NumChannels < 1 {
-		err := fmt.Errorf("missing or bad PCM format information")
-		return nil, 0, 0, err
-	}
-
-	var data []int
-	if buf.Format.NumChannels == 1 {
-		data = buf.Data
-	} else {
-		// Multiple channels, keep the second one (right, if stereo).
-		fmt.Print("Extracting second channel...")
-		start := time.Now()
-
-		// Make a new buffer so we can release the oversized one.
-		data = make([]int, buf.NumFrames())
-
-		channels := buf.Format.NumChannels
-		for i, j := 0, 1; i < len(data); i, j = i+1, j+channels {
-			data[i] = buf.Data[j]
-		}
-		fmt.Println(" done in", time.Since(start))
-	}
-
-	return data, buf.Format.SampleRate, buf.SourceBitDepth, nil
-}
-
-func saveSamples(fn string, samples []int, rate, bits int) (er error) {
-	f, err := os.Create(fn)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := f.Close(); err != nil && er == nil {
-			er = err
-		}
-	}()
-
-	e := wav.NewEncoder(f, rate, bits, 1, 1)
-
-	buf := &audio.IntBuffer{
-		Format: &audio.Format{
-			NumChannels: 1,
-			SampleRate:  rate,
-		},
-
-		Data: samples,
-
-		SourceBitDepth: bits,
-	}
-	if err := e.Write(buf); err != nil {
-		return err
-	}
-
-	if err := e.Close(); err != nil {
-		return err
-	}
-
-	return nil
 }
