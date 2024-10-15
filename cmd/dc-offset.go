@@ -30,6 +30,7 @@ var args = struct {
 	NoiseFloor int  `help:"noise floor; -1 means use 2% of max"`
 	PeakWidth  int  `help:"width of a peak; 0 means use default"`
 	Offsets    bool `help:"output offsets instead of adjusted samples"`
+	Stereo     bool `help:"output both offsets and samples as stereo"`
 }{
 	Output:     "out.wav",
 	NoiseFloor: -1,
@@ -62,7 +63,14 @@ func run() error {
 		return err
 	}
 
-	err = wav.SaveMono(args.Output, output, rate, bits)
+	if args.Stereo {
+		for i, v := range output {
+			samples[i] -= v
+		}
+		err = wav.SaveChannels(args.Output, rate, bits, output, samples)
+	} else {
+		err = wav.SaveMono(args.Output, rate, bits, output)
+	}
 	if err != nil {
 		return err
 	}
@@ -103,7 +111,11 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 		)
 	}
 
-	if !args.Offsets {
+	// This is tricky: instead of checking if neither is set, which
+	// would make it always output samples to the right channel, this
+	// makes it output samples to the right (or mono) by default, and to
+	// the left if both are given.
+	if args.Offsets == args.Stereo {
 		for i, v := range output {
 			output[i] = samples[i] - v
 		}

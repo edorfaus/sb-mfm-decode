@@ -68,7 +68,7 @@ func run() error {
 		return err
 	}
 
-	err = wav.SaveMono(args.Output, output, rate, bits)
+	err = wav.SaveMono(args.Output, rate, bits, output)
 	if err != nil {
 		return err
 	}
