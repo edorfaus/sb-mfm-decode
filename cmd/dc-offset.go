@@ -10,6 +10,7 @@ import (
 	"github.com/alexflint/go-arg"
 
 	"github.com/edorfaus/sb-mfm-decode/filter"
+	"github.com/edorfaus/sb-mfm-decode/log"
 	"github.com/edorfaus/sb-mfm-decode/wav"
 )
 
@@ -26,6 +27,7 @@ var args = struct {
 	Output string `arg:"positional" help:"output wav file [out.wav]"`
 	// TODO: remove default value text from above help text, when go-arg
 	// is updated to a newer version with the fix for auto-printing it.
+	Debug bool `help:"print verbose debug info (log level 4)"`
 
 	NoiseFloor int  `help:"noise floor; -1 means use 2% of max"`
 	PeakWidth  int  `help:"width of a peak; 0 means use default"`
@@ -38,6 +40,10 @@ var args = struct {
 
 func run() error {
 	arg.MustParse(&args)
+
+	if args.Debug {
+		log.Level = 4
+	}
 
 	samples, meta, err := wav.LoadDataChannel(args.Input)
 	if err != nil {

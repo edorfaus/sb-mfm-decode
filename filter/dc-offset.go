@@ -1,5 +1,11 @@
 package filter
 
+import (
+	"fmt"
+
+	"github.com/edorfaus/sb-mfm-decode/log"
+)
+
 type DCOffset struct {
 	NoiseFloor int
 	PeakWidth  int
@@ -13,6 +19,13 @@ func NewDCOffset(noiseFloor, peakWidth int) *DCOffset {
 		NoiseFloor: noiseFloor,
 		PeakWidth:  peakWidth,
 	}
+}
+
+func bc(v bool, ft string) byte {
+	if v {
+		return ft[1]
+	}
+	return ft[0]
 }
 
 func (f *DCOffset) Run(data []int) []int {
@@ -31,25 +44,38 @@ func (f *DCOffset) Run(data []int) []int {
 	setOffset := func(v int) {
 		f.offset = v
 		out[i] = v
+		log.F(4, " | ofs=%v\n", v)
 	}
+	sz := len(fmt.Sprint(len(data)))
+	log.Ln(4)
 	for ; i < len(data); i++ {
+		log.F(4, "%*v:", sz, i)
 		// Get the ends of the peak we are currently in, if any
 		back, forward := i, i
 
 		v := data[i] - f.offset
+		log.F(4, " %6v -%6v =%6v", data[i], f.offset, v)
 		if abs(v) > nf {
 			back = f.findNoiseOrEdge(i, -1)
 			forward = f.findNoiseOrEdge(i, 1)
 		}
+		log.F(4, " B:%*v F:%*v", sz, back, sz, forward)
 
 		// Find the next peak in either direction
 		back2 := f.findPeak(back, -1)
 		forward2 := f.findPeak(forward, 1)
 
+		log.F(4, " b:%*v f:%*v", sz, back2, sz, forward2)
+
 		// Get low/high values for these peaks
 		bLow, bHigh := lowHigh(data[back2 : back+1])
 		hLow, hHigh := lowHigh(data[back : forward+1])
 		fLow, fHigh := lowHigh(data[forward : forward2+1])
+
+		log.F(
+			4, " L:%6v,%6v,%6v H:%6v,%6v,%6v", bLow, hLow, fLow,
+			bHigh, hHigh, fHigh,
+		)
 
 		// Check which peaks we have, and whether to look for more
 		allLow := min(bLow, min(hLow, fLow))
@@ -58,14 +84,20 @@ func (f *DCOffset) Run(data []int) []int {
 		hasLow := allLow-f.offset < -nf
 		hasHigh := allHigh-f.offset > nf
 
+		hasBack := abs(bLow-f.offset) > nf || abs(bHigh-f.offset) > nf
+		hasFwd := abs(fLow-f.offset) > nf || abs(fHigh-f.offset) > nf
+
+		log.F(
+			4, " has:%c%c%c%c", bc(hasLow, "lL"), bc(hasHigh, "hH"),
+			bc(hasBack, "bB"), bc(hasFwd, "fF"),
+		)
+
 		if hasLow && hasHigh {
 			setOffset((allLow + allHigh) / 2)
 			continue
 		}
 
-		// We are missing a peak type, see if we can find it.
-		hasBack := abs(bLow-f.offset) > nf || abs(bHigh-f.offset) > nf
-		hasFwd := abs(fLow-f.offset) > nf || abs(fHigh-f.offset) > nf
+		// We are missing a peak type, having only high or low, or none.
 
 		if !hasBack && !hasFwd {
 			// No peaks in either direction; are we at a peak?
@@ -80,42 +112,8 @@ func (f *DCOffset) Run(data []int) []int {
 			continue
 		}
 
-		// We have at least one peak in this area, look for another.
-		if hasBack {
-			back3 := f.findPeak(back2, -1)
-			b3Low, b3High := lowHigh(data[back3 : back2+1])
-			if !hasLow && b3Low-f.offset < -nf {
-				// This is a low peak, which was missing
-				allLow = min(allLow, b3Low)
-				hasLow = true
-			}
-			if !hasHigh && b3High-f.offset > nf {
-				// This is a high peak, which was missing
-				allHigh = max(allHigh, b3High)
-				hasHigh = true
-			}
-		}
-		if hasFwd && !(hasLow && hasHigh) {
-			forward3 := f.findPeak(forward2, 1)
-			f3Low, f3High := lowHigh(data[forward2 : forward3+1])
-			if !hasLow && f3Low-f.offset < -nf {
-				// This is a low peak, which was missing
-				allLow = min(allLow, f3Low)
-				hasLow = true
-			}
-			if !hasHigh && f3High-f.offset > nf {
-				// This is a high peak, which was missing
-				allHigh = max(allHigh, f3High)
-				hasHigh = true
-			}
-		}
-
-		if hasLow && hasHigh {
-			setOffset((allLow + allHigh) / 2)
-			continue
-		}
-
-		// We did not find another peak, so we cannot use any of them.
+		// This area has one or more peaks, but all of them go in the
+		// same direction, so we cannot use any of them.
 		// Fall back to using only the area that is nothing but noise,
 		// just like we do when there's only noise in the entire area.
 		switch {
@@ -123,6 +121,11 @@ func (f *DCOffset) Run(data []int) []int {
 			setOffset((bLow + bHigh) / 2)
 		case !hasFwd:
 			setOffset((fLow + fHigh) / 2)
+		case allHigh-allLow < nf:
+			// This area contains no peaks (it is as flat as noise), but
+			// the current offset pushes it outside of the noise floor.
+			// Reset the offset so that this is at least not permanent.
+			setOffset((allLow + allHigh) / 2)
 		default:
 			// Peaks in both directions, but they go the same direction;
 			// this shouldn't happen (given reasonable peak widths), but
@@ -130,6 +133,7 @@ func (f *DCOffset) Run(data []int) []int {
 			setOffset(f.offset)
 		}
 	}
+	log.Ln(4)
 
 	return out
 }
