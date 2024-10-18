@@ -35,7 +35,7 @@ func F(level int, f string, v ...any) {
 func Warn(v ...any) {
 	if Level >= 0 {
 		fmt.Fprintln(
-			Target, append(append([]any(nil), "Warning:"), v...),
+			Target, append(append([]any(nil), "Warning:"), v...)...,
 		)
 	}
 }
