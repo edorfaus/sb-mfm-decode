@@ -41,12 +41,11 @@ func (f *DCOffset) Run(data []int) []int {
 
 		// We found the first peak after the noise, handle that peak
 		// (along with the remaining noise leading up to it).
-		cur, next, err := f.firstPeak()
-		if err != nil {
+		if err := f.firstPeak(); err != nil {
 			log.Ln(0, "Error: firstPeak:", err)
 			return f.out
 		}
-		if next.Value == 0 {
+		if !f.outsideNoise(f.pos) {
 			// No next peak, so this was a single peak, and we're in the
 			// noise again, needing to look for another first peak.
 			// (Or we hit the end of the data, which the loop condition
@@ -55,20 +54,14 @@ func (f *DCOffset) Run(data []int) []int {
 		}
 
 		// We handled the first peak in a sequence of peaks; now handle
-		// the next peak in that sequence.
+		// the next peak in that sequence (including the last peak).
 
-		for f.outsideNoise(next.Next) {
-			cur, next, err = f.nextPeak(cur, next)
-			if err != nil {
+		for f.outsideNoise(f.pos) {
+			if err := f.nextPeak(); err != nil {
 				log.Ln(0, "Error: nextPeak:", err)
 				return f.out
 			}
 		}
-
-		// At this point, the next peak is the last in this sequence.
-
-		log.Ln(1, "TODO in Run loop")
-		break // TODO: drop
 	}
 
 	return f.out
@@ -104,7 +97,10 @@ func (f *DCOffset) leadingNoise() {
 }
 
 // Handle the first peak after the leading noise.
-func (f *DCOffset) firstPeak() (cur, next Peak, _ error) {
+// If this is a lone peak, the position will be left in the noise after,
+// or at the end of the data if the peak goes that far.
+// Otherwise, the position will be left at the tip of the peak.
+func (f *DCOffset) firstPeak() error {
 	// This is only called with at most one peak-width of noise before
 	// the peak starts. This peak is likely to mark a boundary where the
 	// DC offset significantly changes, so look for the peak before
@@ -118,55 +114,51 @@ func (f *DCOffset) firstPeak() (cur, next Peak, _ error) {
 	}
 
 	peak := f.findPeakAt(start)
-	fmt.Printf("First peak: %+v\n", peak)
+	log.F(3, "First peak: %+v\n", peak)
 
 	if peak.End < 0 {
-		//log.Warn("peak too long at %v", start)
+		//log.Warn("peak too long at", start)
 		// TODO: handle this, e.g. by re-doing with new offset based on
 		// the min/max of the following area (longer than peak width).
-		return peak, Peak{}, fmt.Errorf("peak too long at %v", start)
+		return fmt.Errorf("peak too long at %v", start)
 	}
 	if peak.Next >= len(data) {
 		// This is a single peak that runs to the end of the data.
 		// There's not much we can do here, so just apply the offset.
-		log.Warn("single peak to end detected at %v", start)
-		for f.pos < len(data) {
-			f.out[f.pos] = f.offset
-			f.pos++
-		}
-		return peak, Peak{}, nil
+		log.Warn("single peak to end detected at", start)
+		f.applyOffsetUntil(len(data))
+		return nil
 	}
 	if f.withinNoise(peak.Next) {
 		// This is a single peak that is followed by noise.
 		// We don't want this lone peak to skew the offset too much, so
 		// we instead find the offset of the noise after the peak, and
 		// apply the average of that and the current offset.
-		log.Warn("single peak detected at %v", start)
+		log.Warn("single peak detected at", start)
 		to := min(peak.Next+pw, len(data))
 		lo, hi := lowHigh(data[peak.Next:to])
 		nextOffset := (lo + hi) / 2
 		peakOffset := (f.offset + nextOffset) / 2
 		f.peakOffsetFadeIn(peak, peakOffset)
 		f.peakOffsetFadeOut(peak, nextOffset)
-		return peak, Peak{}, nil
+		return nil
 	}
 
 	// We found the first peak, and the start of the second.
 	// Find the rest of the second peak, to find the overall DC offset.
 
 	nextPeak := f.findPeakAt(peak.Next)
-	fmt.Printf("Second peak: %+v\n", nextPeak)
+	log.F(3, "Second peak: %+v\n", nextPeak)
 
 	if nextPeak.End < 0 {
-		//log.Warn("next peak too long at %v", nextPeak.Start)
+		//log.Warn("next peak too long at", nextPeak.Start)
 		// TODO: handle this somehow?
-		err := fmt.Errorf("next peak too long at %v", nextPeak.Start)
-		return peak, nextPeak, err
+		return fmt.Errorf("next peak too long at %v", nextPeak.Start)
 	}
 
 	f.peakOffsetFadeIn(peak, (peak.Value+nextPeak.Value)/2)
 
-	return peak, nextPeak, nil
+	return nil
 }
 
 // This applies the offset to the leading edge of the given peak (the
@@ -176,10 +168,7 @@ func (f *DCOffset) firstPeak() (cur, next Peak, _ error) {
 // This is only intended to be used for the first peak in a group.
 func (f *DCOffset) peakOffsetFadeIn(peak Peak, peakOffset int) {
 	// TODO: consider adjusting the offset also between pos and start.
-	for f.pos < peak.Start {
-		f.out[f.pos] = f.offset
-		f.pos++
-	}
+	f.applyOffsetUntil(peak.Start)
 
 	// TODO: The below interpolation works, in that it does what it was
 	// designed to do. However, looking at the output, I no longer think
@@ -226,37 +215,89 @@ func (f *DCOffset) peakOffsetFadeOut(peak Peak, nextOffset int) {
 }
 
 // Handle the first peak after the leading noise.
-func (f *DCOffset) nextPeak(prev, cur Peak) (_, _ Peak, _ error) {
-	// This is called with f.pos at the tip of the prev peak, and with
-	// f.offset set to the DC offset that was used for that peak.
-	// The intent is for this call to handle the cur peak, and return it
-	// along with the next peak, to then be called again with those.
+// This expects to be called with f.pos at the tip of the previous peak,
+// and will leave f.pos at the tip of the next peak (if there is one),
+// or in the noise after the peak if it was the last one.
+func (f *DCOffset) nextPeak() error {
+	pw, data := f.PeakWidth, f.data
 
-	next := f.findPeakAt(cur.Next)
-	fmt.Printf("Next peak: %+v\n", next)
-	if next.End < 0 {
-		// TODO: handle this somehow?
-		err := fmt.Errorf("next peak too long at %v", cur.Next)
-		return cur, next, err
+	// Find the end of the previous peak, and the start of the current.
+	// The first time through (from firstPeak), this always exists, but
+	// on later repetitions it might not, if the previously current peak
+	// was the last one in this sequence.
+	prev := f.findPeakAt(f.pos)
+	log.F(4, "Previous peak: %+v\n", prev)
+	if prev.End < 0 {
+		// TODO: handle this somehow? (I'm not sure it can happen)
+		return fmt.Errorf("previous peak too long at %v", prev.Start)
+	}
+	if prev.Next >= len(data) {
+		// This peak went off the end of the data.
+		// There's not much we can do here, so just apply the offset.
+		log.Warn("peak runs off end of data at", prev.Start)
+		f.applyOffsetUntil(len(data))
+		return nil
+	}
+	if f.withinNoise(prev.Next) {
+		// That was the last peak of this sequence, so end the sequence.
+		to := min(prev.Next+pw, len(data))
+		lo, hi := lowHigh(data[prev.Next:to])
+		nextOffset := (lo + hi) / 2
+		f.peakOffsetFadeOut(prev, nextOffset)
+		return nil
 	}
 
-	// We now have a previous and next peak, which must be the same
-	// polarity, along with the opposite-polarity current peak.
-	// Place the current peak based on the average of the prev and next.
+	// We have a current peak, so find its details, and look for a next.
+	cur := f.findPeakAt(prev.Next)
+	log.F(4, "Current peak: %+v\n", cur)
+	if cur.End < 0 {
+		// TODO: handle this somehow?
+		return fmt.Errorf("current peak too long at %v", cur.Start)
+	}
+	if cur.Next >= len(data) {
+		// This peak went off the end of the data.
+		// There's not much we can do here, so just apply the offset.
+		log.Warn("peak runs off end of data at", prev.Start)
+		f.applyOffsetUntil(len(data))
+		return nil
+	}
 
-	prevNextAvg := (prev.Value + next.Value) / 2
-	peakOffset := (prevNextAvg + cur.Value) / 2
+	prevNextValue := prev.Value
 
-	// TODO: fade the old offset into the new one somehow?
+	// TODO: enable or remove this code. Not sure the results are good.
+	if false && f.outsideNoise(cur.Next) {
+		// There is at least one more peak in this sequence, which must
+		// be the same polarity as the previous peak. To smooth things
+		// out a little, average its value with the previous peak.
+		next := f.findPeakAt(cur.Next)
+		log.F(4, "Next peak: %+v\n", next)
+		if next.End < 0 {
+			// TODO: handle this somehow?
+			err := fmt.Errorf("next peak too long at %v", next.Start)
+			return err
+		}
+		// If the peak goes off the end of the data, we can't really use
+		// it safely, so just ignore it. Otherwise, add in its value.
+		if next.Next < len(data) {
+			prevNextValue = (prevNextValue + next.Value) / 2
+		}
+	}
+
+	peakOffset := (prevNextValue + cur.Value) / 2
 
 	// Apply the offset to the edge leading to this peak.
-	for f.pos < cur.Index {
-		f.out[f.pos] = peakOffset
+	// TODO: should I fade the old offset into the new one somehow?
+	f.offset = peakOffset
+	f.applyOffsetUntil(cur.Index)
+
+	return nil
+}
+
+func (f *DCOffset) applyOffsetUntil(end int) {
+	for f.pos < end {
+		f.out[f.pos] = f.offset
 		f.pos++
 	}
-	f.offset = peakOffset
-
-	return cur, next, nil
 }
 
 type Peak struct {
