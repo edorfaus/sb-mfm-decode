@@ -29,11 +29,15 @@ func NewDCOffset(noiseFloor, peakWidth int) *DCOffset {
 	}
 }
 
-func (f *DCOffset) Run(data []int) []int {
+func (f *DCOffset) Run(data []int) ([]int, error) {
 	if f.PeakWidth <= 0 {
 		f.PeakWidth = 48000 / 4800
 	}
 	f.noiseLevel = f.NoiseFloor
+
+	defer func() {
+		f.data, f.out = nil, nil
+	}()
 
 	f.data = data
 	f.offset = 0
@@ -49,8 +53,7 @@ func (f *DCOffset) Run(data []int) []int {
 		// We found the first peak after the noise, handle that peak
 		// (along with the remaining noise leading up to it).
 		if err := f.firstPeak(); err != nil {
-			log.Ln(0, "Error: firstPeak:", err)
-			return f.out
+			return f.out, fmt.Errorf("firstPeak: %w", err)
 		}
 		if !f.outsideNoise(f.pos) {
 			// No next peak, so this was a single peak, and we're in the
@@ -65,13 +68,12 @@ func (f *DCOffset) Run(data []int) []int {
 
 		for f.outsideNoise(f.pos) {
 			if err := f.nextPeak(); err != nil {
-				log.Ln(0, "Error: nextPeak:", err)
-				return f.out
+				return f.out, fmt.Errorf("nextPeak: %w", err)
 			}
 		}
 	}
 
-	return f.out
+	return f.out, nil
 }
 
 func (f *DCOffset) outsideNoise(pos int) bool {

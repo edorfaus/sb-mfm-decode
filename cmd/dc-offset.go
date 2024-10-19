@@ -102,7 +102,10 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 		f.NoiseFloor, f.PeakWidth,
 	)
 
-	output := f.Run(samples)
+	output, err := f.Run(samples)
+	if err != nil {
+		return nil, err
+	}
 
 	if args.Stats {
 		total := 0.0
