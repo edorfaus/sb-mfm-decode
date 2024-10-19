@@ -139,8 +139,8 @@ func (f *DCOffset) firstPeak() error {
 		lo, hi := lowHigh(data[peak.Next:to])
 		nextOffset := (lo + hi) / 2
 		peakOffset := (f.offset + nextOffset) / 2
-		f.peakOffsetFadeIn(peak, peakOffset)
-		f.peakOffsetFadeOut(peak, nextOffset)
+		f.handleLeadingEdge(peak, peakOffset)
+		f.handleTrailingEdge(peak, nextOffset)
 		return nil
 	}
 
@@ -156,62 +156,93 @@ func (f *DCOffset) firstPeak() error {
 		return fmt.Errorf("next peak too long at %v", nextPeak.Start)
 	}
 
-	f.peakOffsetFadeIn(peak, (peak.Value+nextPeak.Value)/2)
+	f.handleLeadingEdge(peak, (peak.Value+nextPeak.Value)/2)
 
 	return nil
 }
 
-// This applies the offset to the leading edge of the given peak (the
-// noise before it, and fading in the new offset up to the peak's tip).
-// It does not touch the sample that is at the peak's tip, but leaves
-// the current position pointing at that sample, and sets f.offset.
+// This applies the offset to the leading edge of the given peak, while
+// ensuring that doing so does not create an artificial inverse peak.
 // This is only intended to be used for the first peak in a group.
-func (f *DCOffset) peakOffsetFadeIn(peak Peak, peakOffset int) {
-	// TODO: consider adjusting the offset also between pos and start.
-	f.applyOffsetUntil(peak.Start)
+func (f *DCOffset) handleLeadingEdge(peak Peak, peakOffset int) {
+	data, out := f.data, f.out
 
-	// TODO: The below interpolation works, in that it does what it was
-	// designed to do. However, looking at the output, I no longer think
-	// this is something we *want* to do. (The peak becomes too long.)
+	// This works backwards, to properly detect the first zero crossing.
+	// Apply the offset until the start, or until the data crosses zero.
+	peakSign := data[peak.Index] < 0
+	pos := peak.Index - 1
+	for pos >= peak.Start {
+		v := data[pos] - peakOffset
+		if (v < 0) != peakSign {
+			break
+		}
+		out[pos] = peakOffset
+		pos--
+	}
 
-	// Interpolate between current offset and the target peak offset
-	// With t going from 0 to 1:
-	// v = from*(1-t) + to*(t) = from-from*t + to*t = from+(to-from)*t
-	// And, t = relT / deltaT = (pos-start) / (end-start)
-	// However, we adjust things a bit, since we want to start the lerp
-	// with the old offset at the sample _before_ the start of the peak.
-	dT := peak.Index - f.pos + 1
-	dOfs := peakOffset - f.offset
-	for relT := 1; relT < dT; relT++ {
-		// TODO: use proper rounding with this formula?
-		f.out[f.pos] = f.offset + dOfs*relT/dT
-		f.pos++
+	// After crossing zero, we ensure the rest stays as within noise.
+	// The first sample we want to be extra careful with, to keep the
+	// crossing point as close to correct as possible. The rest we try
+	// to move closer to the earlier offset, but still within noise.
+	offset := peakOffset
+	for pos >= f.pos {
+		offset = f.clampToNoise(offset, data[pos])
+		out[pos] = offset
+		pos--
+		// Move the offset closer to the earlier offset.
+		offset = (offset + f.offset) / 2
 	}
 
 	f.offset = peakOffset
+	f.pos = peak.Index
 }
 
-// This applies the offset to the trailing edge of the given peak (the
-// tip, and out to the noise following it), fading out the offset from
-// the current value to the given next offset, and then sets f.offset.
+// This applies the offset to the trailing edge of the given peak, while
+// ensuring that doing so does not create an artificial inverse peak.
 // This is only intended to be used for the last peak in a group, and
 // expects that the current position is at the tip of that peak.
-func (f *DCOffset) peakOffsetFadeOut(peak Peak, nextOffset int) {
-	// TODO: this is probably not what I want to do, see FadeIn above
+func (f *DCOffset) handleTrailingEdge(peak Peak, nextOffset int) {
+	data, out, offset := f.data, f.out, f.offset
 
-	// Interpolate between current offset and the target peak offset
-	// With t going from 0 to 1:
-	// v = from*(1-t) + to*(t) = from-from*t + to*t = from+(to-from)*t
-	// And, t = relT / deltaT = (pos-start) / (end-start)
-	dT := peak.Next - f.pos
-	dOfs := nextOffset - f.offset
-	for relT := 0; relT < dT; relT++ {
-		// TODO: use proper rounding with this formula?
-		f.out[f.pos] = f.offset + dOfs*relT/dT
+	// Apply the offset until the end, or until the data crosses zero.
+	peakSign := data[peak.Index] < 0
+	for f.pos <= peak.End {
+		v := data[f.pos] - offset
+		if (v < 0) != peakSign {
+			break
+		}
+		out[f.pos] = offset
 		f.pos++
 	}
 
+	// After crossing zero, we ensure the rest stays as within noise.
+	// The first sample we want to be extra careful with, to keep the
+	// crossing point as close to correct as possible. The rest we try
+	// to move closer to the target offset, but still within noise.
+	for f.pos < peak.Next {
+		offset = f.clampToNoise(offset, data[f.pos])
+		out[f.pos] = offset
+		f.pos++
+		// Move the offset closer to the next offset.
+		offset = (offset + nextOffset) / 2
+	}
+
 	f.offset = nextOffset
+}
+
+// clampToNoise clamps the given offset such that the given sample would
+// be within the noise. If it already is, the offset is returned as-is.
+func (f *DCOffset) clampToNoise(offset, val int) int {
+	nf := f.NoiseFloor
+	if val-offset > nf {
+		// we want v-ofs = nf => v = nf+ofs => v-nf = ofs
+		return val - nf
+	}
+	if val-offset < -nf {
+		// we want v-ofs = -nf => v = ofs-nf => ofs = v+nf
+		return val + nf
+	}
+	return offset
 }
 
 // Handle the first peak after the leading noise.
@@ -243,7 +274,7 @@ func (f *DCOffset) nextPeak() error {
 		to := min(prev.Next+pw, len(data))
 		lo, hi := lowHigh(data[prev.Next:to])
 		nextOffset := (lo + hi) / 2
-		f.peakOffsetFadeOut(prev, nextOffset)
+		f.handleTrailingEdge(prev, nextOffset)
 		return nil
 	}
 
