@@ -123,6 +123,9 @@ func (c *PulseClassifier) SetBitWidth(bitWidth float64) {
 		panic(fmt.Errorf("invalid bit width: %v", bitWidth))
 	}
 	// TODO: should we use a weighted average of recent bit widths?
+	if c.BitWidth != 0 {
+		bitWidth = (c.BitWidth + bitWidth) / 2
+	}
 	c.BitWidth = bitWidth
 	c.updateCrossingTime(bitWidth)
 }
