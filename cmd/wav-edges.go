@@ -116,7 +116,7 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 	// TODO: improve this, maybe make a non-method func for it?
 	if args.MaxCrossingTime < 0 {
 		bitWidth := mfm.ExpectedBitWidth(mfm.DefaultBitRate, rate)
-		mfm.NewDecoder(ed).SetBitWidth(bitWidth)
+		mfm.NewDecoder(ed).SetBitWidth(int(bitWidth))
 	} else {
 		ed.MaxCrossingTime = args.MaxCrossingTime
 	}

@@ -5,7 +5,7 @@ const DefaultBitRate = 4800
 
 // ExpectedBitWidth calculates the expected MFM bit width for the given
 // MFM bit rate and input sampling rate.
-func ExpectedBitWidth(mfmBitRate, sampleRate int) int {
+func ExpectedBitWidth(mfmBitRate, sampleRate int) float64 {
 	if mfmBitRate == 0 {
 		mfmBitRate = DefaultBitRate
 	}
@@ -18,5 +18,5 @@ func ExpectedBitWidth(mfmBitRate, sampleRate int) int {
 		panic("invalid sample rate: must be at least 2 * bit rate")
 	}
 	// This is my attempt at doing proper half-way rounding in int math.
-	return (sampleRate + mfmBitRate/2) / mfmBitRate
+	return float64(sampleRate) / float64(mfmBitRate)
 }
