@@ -48,25 +48,11 @@ func (c *PulseClassifier) Next() bool {
 
 	if c.BitWidth == 0 {
 		// When the bit width is not set, the data must start with a
-		// lead-in, which means a sequence of zero bits (short pulses).
-		// Ideally we'd want to look at more than one, especially since
-		// the first ones are often distorted, but for now we assume
-		// the first one is close enough to recognize the next one.
-		if c.Edges.PrevType == EdgeToNone {
-			// This is (probably) the empty area before the first edge.
+		// lead-in, which can then be used to figure out the bit width.
+		if !c.peekAtLeadIn() {
 			c.Class = PulseUnknown
-			if c.Edges.MaxCrossingTime == 0 {
-				// Set it to something that is at least reasonable, just
-				// until the next edge.
-				// TODO: clean this up to be less hacky.
-				// For now, we reuse the existing code and then reset
-				// the BitWidth to 0 since we didn't want to set it yet.
-				c.SetBitWidth(ExpectedBitWidth(DefaultBitRate, 44100))
-				c.BitWidth = 0
-			}
 			return true
 		}
-		c.SetBitWidth(c.Width)
 	}
 
 	// In MFM encoding, the distance between edges is either 2, 3 or 4
@@ -139,8 +125,87 @@ func (c *PulseClassifier) SetBitWidth(bitWidth int) {
 	}
 	// TODO: should we use a weighted average of recent bit widths?
 	c.BitWidth = bitWidth
+	c.updateCrossingTime(bitWidth)
+}
+
+func (c *PulseClassifier) updateCrossingTime(bitWidth int) {
 	// TODO: figure out what would be a good value for this
 	c.Edges.MaxCrossingTime = (bitWidth + 1) / 2
+}
+
+// peekAtLeadIn is called when the BitWidth is 0, to peek ahead at the
+// lead-in and use it to figure out the bit width to use.
+// It returns false if it was unable to figure out the bit width.
+func (c *PulseClassifier) peekAtLeadIn() bool {
+	// The lead-in is a sequence of zero bits (short pulses), which can
+	// be seen as a sequence of equidistant edges. To peek ahead at
+	// those edges without consuming them, we make a backup copy of the
+	// edge detector and restore it afterwards.
+	edgesBackup := *c.Edges
+	defer func() {
+		*c.Edges = edgesBackup
+	}()
+
+	if c.Edges.PrevType == EdgeToNone {
+		// This is (probably) the empty area before the first pulse.
+
+		if c.Edges.MaxCrossingTime == 0 {
+			// Just to have something to work with; changed later.
+			width := ExpectedBitWidth(DefaultBitRate, 44100)
+			c.updateCrossingTime(width)
+		}
+
+		if !c.Edges.Next() {
+			return false
+		}
+
+		// Since the max crossing time might be wrong, use this pulse to
+		// set it and then re-do the edge, in case its width changes.
+		width := c.Edges.CurIndex - c.Edges.PrevIndex
+
+		*c.Edges = edgesBackup
+		c.updateCrossingTime(width)
+
+		if !c.Edges.Next() {
+			return false
+		}
+	}
+
+	// We want to look at more than one pulse, since some of the early
+	// ones are often distorted and the timing is often a fractional
+	// number of samples.
+
+	total := 0
+	count := 0
+	for {
+		if c.TouchesNone() {
+			// ToNone pulses are not reliable for timing, and indicate
+			// that there aren't really (enough) proper pulses here.
+			return false
+		}
+
+		width := c.Edges.CurIndex - c.Edges.PrevIndex
+
+		total += width
+		count++
+		if count >= 8 {
+			break
+		}
+
+		c.updateCrossingTime(total / count)
+		if !c.Edges.Next() {
+			return false
+		}
+	}
+
+	// Breaking out of the loop indicates we have enough pulses for now,
+	// so average them and use that as the bit width.
+	c.SetBitWidth(total / count)
+
+	// Copy the crossing time to the backup so it works after restore.
+	edgesBackup.MaxCrossingTime = c.Edges.MaxCrossingTime
+
+	return true
 }
 
 func (c PulseClass) Valid() bool {
