@@ -94,11 +94,11 @@ func (c *PulseClassifier) Next() bool {
 	case pulseWidth*4 < bitWidth*7:
 		// 3 half-bit widths
 		c.Class = PulseMedium
-		c.SetBitWidth(pulseWidth * 2 / 3)
+		c.SetBitWidth((pulseWidth*4 + 3) / 6)
 	case pulseWidth*4 < bitWidth*9:
 		// 4 half-bit widths
 		c.Class = PulseLong
-		c.SetBitWidth(pulseWidth / 2)
+		c.SetBitWidth((pulseWidth + 1) / 2)
 	default:
 		// more than 4 half-bit widths
 		c.Class = PulseHuge
