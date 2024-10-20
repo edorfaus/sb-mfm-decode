@@ -4,8 +4,6 @@ import (
 	"fmt"
 )
 
-const DefaultBitRate = 4800
-
 var EOD = fmt.Errorf("end of input data")
 
 type Decoder struct {
@@ -30,27 +28,12 @@ func NewDecoder(ed *EdgeDetect) *Decoder {
 	return d
 }
 
-// InitFreq initializes the decoder based on the given MFM bitrate and
-// input sample rate. This is optional, but makes it possible to decode
-// data without an initial lead-in.
-func (d *Decoder) InitFreq(mfmBitRate, sampleRate int) {
-	if mfmBitRate == 0 {
-		mfmBitRate = DefaultBitRate
-	} else if mfmBitRate < 0 {
-		panic("invalid MFM bit rate")
-	}
-	// While more is preferred, minimum 2x bit rate is needed (Nyquist).
-	if sampleRate < 2*mfmBitRate {
-		panic("invalid sample rate: must be at least 2 * bit rate")
-	}
-	samplesPerCycle := sampleRate / mfmBitRate
-	//samplesPerPeak := samplesPerCycle / 2
-	d.SetBitWidth(samplesPerCycle)
-}
-
 // SetBitWidth sets the bit width in samples for the input edges.
 //
 // It also updates the underlying edge detector's settings accordingly.
+//
+// Calling this before starting to decode data is optional, but makes it
+// possible to decode data that does not have an initial lead-in.
 func (d *Decoder) SetBitWidth(bitWidth int) {
 	if bitWidth < 2 {
 		panic(fmt.Errorf("invalid bit width: %v", bitWidth))
