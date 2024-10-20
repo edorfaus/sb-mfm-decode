@@ -8,6 +8,8 @@ import (
 
 	"github.com/alexflint/go-arg"
 
+	"github.com/edorfaus/sb-mfm-decode/filter"
+	"github.com/edorfaus/sb-mfm-decode/log"
 	"github.com/edorfaus/sb-mfm-decode/mfm"
 	"github.com/edorfaus/sb-mfm-decode/wav"
 )
@@ -28,6 +30,8 @@ var args = struct {
 
 	NoiseFloor      int `help:"noise floor; -1 means use 2% of max"`
 	MaxCrossingTime int `help:"max samples for 0-crossing before None"`
+
+	NoClean bool `help:"do not clean the input signal first"`
 }{
 	Output: "out.wav",
 
@@ -49,6 +53,12 @@ func run() error {
 		"Input: %v %v-bit samples at %v Hz = %v\n",
 		len(samples), bits, rate, d(len(samples))*time.Second/d(rate),
 	)
+
+	if !args.NoClean {
+		if err := cleanSamples(samples, rate, bits); err != nil {
+			return err
+		}
+	}
 
 	if args.Stats {
 		h, l := samples[0], samples[0]
@@ -76,13 +86,27 @@ func run() error {
 	return nil
 }
 
-func processSamples(samples []int, rate, bits int) ([]int, error) {
-	// For now, we set the noise floor at 2% of the max value.
-	noiseFloor := (1 << (bits - 1)) * 2 / 100
-	// ... unless overridden by the arguments.
+func getNoiseFloor(bits int) int {
 	if args.NoiseFloor >= 0 {
-		noiseFloor = args.NoiseFloor
+		return args.NoiseFloor
 	}
+	return filter.DefaultNoiseFloor(bits)
+}
+
+func cleanSamples(samples []int, rate, bits int) error {
+	defer log.Time(1, "Cleaning waveform...\n")("Cleaning done in")
+
+	noiseFloor := getNoiseFloor(bits)
+	peakWidth := filter.MfmPeakWidth(mfm.DefaultBitRate, rate)
+
+	log.Ln(1, "  noise floor:", noiseFloor, "; peak width:", peakWidth)
+
+	f := filter.NewDCOffset(noiseFloor, peakWidth)
+	return f.Run(samples, samples)
+}
+
+func processSamples(samples []int, rate, bits int) ([]int, error) {
+	noiseFloor := getNoiseFloor(bits)
 
 	ed := mfm.NewEdgeDetect(samples, noiseFloor)
 
