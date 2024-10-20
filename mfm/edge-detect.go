@@ -176,3 +176,16 @@ func (e *EdgeDetect) nextFromHigh() bool {
 	e.CurType = EdgeToLow
 	return true
 }
+
+func (t EdgeType) String() string {
+	switch t {
+	case EdgeToNone:
+		return "N"
+	case EdgeToHigh:
+		return "H"
+	case EdgeToLow:
+		return "L"
+	default:
+		return "?"
+	}
+}
