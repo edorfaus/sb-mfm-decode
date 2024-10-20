@@ -29,19 +29,23 @@ func NewDCOffset(noiseFloor, peakWidth int) *DCOffset {
 	}
 }
 
-func (f *DCOffset) Run(data []int) ([]int, error) {
+func (f *DCOffset) Run(input, output []int) error {
 	if f.PeakWidth <= 0 {
 		f.PeakWidth = 48000 / 4800
 	}
 	f.noiseLevel = f.NoiseFloor
 
+	if len(output) < len(input) {
+		return fmt.Errorf("output cannot be shorter than input")
+	}
+
 	defer func() {
 		f.data, f.out = nil, nil
 	}()
 
-	f.data = data
+	f.data = input
 	f.offset = 0
-	f.out = make([]int, len(f.data))
+	f.out = output
 	f.pos = 0
 	for f.pos < len(f.data) {
 		// Initial state: we're at the start of the leading noise
@@ -53,7 +57,7 @@ func (f *DCOffset) Run(data []int) ([]int, error) {
 		// We found the first peak after the noise, handle that peak
 		// (along with the remaining noise leading up to it).
 		if err := f.firstPeak(); err != nil {
-			return f.out, fmt.Errorf("firstPeak: %w", err)
+			return fmt.Errorf("firstPeak: %w", err)
 		}
 		if !f.outsideNoise(f.pos) {
 			// No next peak, so this was a single peak, and we're in the
@@ -68,12 +72,12 @@ func (f *DCOffset) Run(data []int) ([]int, error) {
 
 		for f.outsideNoise(f.pos) {
 			if err := f.nextPeak(); err != nil {
-				return f.out, fmt.Errorf("nextPeak: %w", err)
+				return fmt.Errorf("nextPeak: %w", err)
 			}
 		}
 	}
 
-	return f.out, nil
+	return nil
 }
 
 func (f *DCOffset) outsideNoise(pos int) bool {
@@ -89,14 +93,15 @@ func (f *DCOffset) withinNoise(pos int) bool {
 // Move past the leading noise in the data, while adjusting the offset.
 func (f *DCOffset) leadingNoise() {
 	pw, nf, nl, data := f.PeakWidth, f.NoiseFloor, f.noiseLevel, f.data
-	for f.pos < len(data) {
-		to := min(f.pos+pw, len(data))
-		lo, hi := lowHigh(data[f.pos:to])
-		dlo, dhi := abs(lo-f.offset), abs(hi-f.offset)
+	out, pos, offset := f.out, f.pos, f.offset
+
+	for pos < len(data) {
+		to := min(pos+pw, len(data))
+		lo, hi := lowHigh(data[pos:to])
+		dlo, dhi := abs(lo-offset), abs(hi-offset)
 		if dlo > nl || dhi > nl {
 			// Found a peak.
-			f.noiseLevel = nl
-			return
+			break
 		}
 
 		if nl > nf {
@@ -112,11 +117,13 @@ func (f *DCOffset) leadingNoise() {
 
 		// No peak here, just noise, so adjust the offset by averaging
 		// the old value with the new middle-point.
-		f.offset = (f.offset + ((lo + hi) / 2)) / 2
-		f.out[f.pos] = f.offset
-		f.pos++
+		offset = (offset + ((lo + hi) / 2)) / 2
+		out[pos] = data[pos] - offset
+		pos++
 	}
 
+	f.offset = offset
+	f.pos = pos
 	f.noiseLevel = nl
 }
 
@@ -215,7 +222,7 @@ func (f *DCOffset) handleLeadingEdge(peak Peak, peakOffset int) {
 		if (v < 0) != peakSign {
 			break
 		}
-		out[pos] = peakOffset
+		out[pos] = v
 		pos--
 	}
 
@@ -226,7 +233,7 @@ func (f *DCOffset) handleLeadingEdge(peak Peak, peakOffset int) {
 	offset := peakOffset
 	for pos >= f.pos {
 		offset = f.clampToNoise(offset, data[pos])
-		out[pos] = offset
+		out[pos] = data[pos] - offset
 		pos--
 		// Move the offset closer to the earlier offset.
 		offset = (offset + f.offset) / 2
@@ -241,32 +248,33 @@ func (f *DCOffset) handleLeadingEdge(peak Peak, peakOffset int) {
 // This is only intended to be used for the last peak in a group, and
 // expects that the current position is at the tip of that peak.
 func (f *DCOffset) handleTrailingEdge(peak Peak, nextOffset int) {
-	data, out, offset := f.data, f.out, f.offset
+	data, out, offset, pos := f.data, f.out, f.offset, f.pos
 
 	// Apply the offset until the end, or until the data crosses zero.
 	peakSign := data[peak.Index] < 0
-	for f.pos <= peak.End {
-		v := data[f.pos] - offset
+	for pos <= peak.End {
+		v := data[pos] - offset
 		if (v < 0) != peakSign {
 			break
 		}
-		out[f.pos] = offset
-		f.pos++
+		out[pos] = v
+		pos++
 	}
 
 	// After crossing zero, we ensure the rest stays as within noise.
 	// The first sample we want to be extra careful with, to keep the
 	// crossing point as close to correct as possible. The rest we try
 	// to move closer to the target offset, but still within noise.
-	for f.pos < peak.Next {
-		offset = f.clampToNoise(offset, data[f.pos])
-		out[f.pos] = offset
-		f.pos++
+	for pos < peak.Next {
+		offset = f.clampToNoise(offset, data[pos])
+		out[pos] = data[pos] - offset
+		pos++
 		// Move the offset closer to the next offset.
 		offset = (offset + nextOffset) / 2
 	}
 
 	f.offset = nextOffset
+	f.pos = pos
 }
 
 // clampToNoise clamps the given offset such that the given sample would
@@ -378,10 +386,12 @@ func (f *DCOffset) updateNoiseLevel(offset, tip1, tip2 int) {
 }
 
 func (f *DCOffset) applyOffsetUntil(end int) {
-	for f.pos < end {
-		f.out[f.pos] = f.offset
-		f.pos++
+	data, out, pos, offset := f.data, f.out, f.pos, f.offset
+	for pos < end {
+		out[pos] = data[pos] - offset
+		pos++
 	}
+	f.pos = pos
 }
 
 type Peak struct {

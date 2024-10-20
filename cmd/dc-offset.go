@@ -59,21 +59,33 @@ func run() error {
 
 	if args.Stats {
 		l, h := slices.Min(samples), slices.Max(samples)
-		fmt.Printf("Min sample: %v, max: %v\n", l, h)
+		fmt.Printf("Input sample min: %v, max: %v\n", l, h)
 	}
 
-	start := time.Now()
-	output, err := processSamples(samples, rate, bits)
-	fmt.Println("Processing done in", time.Since(start))
+	output, err := runFilter(samples, rate, bits)
 	if err != nil {
 		return err
 	}
 
+	if args.Stats || args.Offsets || args.Stereo {
+		func() {
+			log.Time(2, "Recalculating offsets...")(" done in")
+			for i, v := range output {
+				samples[i] -= v
+			}
+		}()
+	}
+
+	if args.Stats {
+		outputStats(samples, output)
+	}
+
+	if args.Offsets {
+		samples, output = output, samples
+	}
+
 	if args.Stereo {
-		for i, v := range output {
-			samples[i] -= v
-		}
-		err = wav.SaveChannels(args.Output, rate, bits, output, samples)
+		err = wav.SaveChannels(args.Output, rate, bits, samples, output)
 	} else {
 		err = wav.SaveMono(args.Output, rate, bits, output)
 	}
@@ -84,7 +96,14 @@ func run() error {
 	return nil
 }
 
-func processSamples(samples []int, rate, bits int) ([]int, error) {
+func runFilter(samples []int, rate, bits int) ([]int, error) {
+	output := samples
+	if args.Stats || args.Offsets || args.Stereo {
+		output = make([]int, len(samples))
+	}
+
+	defer log.Time(1, "Running filter...\n")("Filter done in")
+
 	noiseFloor := filter.DefaultNoiseFloor(bits)
 	if args.NoiseFloor >= 0 {
 		noiseFloor = args.NoiseFloor
@@ -95,40 +114,34 @@ func processSamples(samples []int, rate, bits int) ([]int, error) {
 		peakWidth = args.PeakWidth
 	}
 
+	log.F(1, "Noise floor: %v, peak width: %v\n", noiseFloor, peakWidth)
+
 	f := filter.NewDCOffset(noiseFloor, peakWidth)
+	return output, f.Run(samples, output)
+}
+
+func outputStats(samples, output []int) {
+	total := 0.0
+	var ol, oh, sl, sh int
+
+	func() {
+		log.Time(2, "Running stats...")(" done in")
+		sl, sh = slices.Min(output), slices.Max(output)
+		ol, oh = samples[0], samples[0]
+		for _, v := range samples {
+			total += float64(v)
+			if v < ol {
+				ol = v
+			}
+			if v > oh {
+				oh = v
+			}
+		}
+	}()
 
 	fmt.Printf(
-		"Noise floor: %v, peak width: %v\n",
-		f.NoiseFloor, f.PeakWidth,
+		"Offsets: min: %v, max: %v, avg: %.3v\n",
+		ol, oh, total/float64(len(output)),
 	)
-
-	output, err := f.Run(samples)
-	if err != nil {
-		return nil, err
-	}
-
-	if args.Stats {
-		total := 0.0
-		for _, v := range output {
-			total += float64(v)
-		}
-
-		fmt.Printf(
-			"Offsets: min: %v, max: %v, avg: %.3v\n",
-			slices.Min(output), slices.Max(output),
-			total/float64(len(output)),
-		)
-	}
-
-	// This is tricky: instead of checking if neither is set, which
-	// would make it always output samples to the right channel, this
-	// makes it output samples to the right (or mono) by default, and to
-	// the left if both are given.
-	if args.Offsets == args.Stereo {
-		for i, v := range output {
-			output[i] = samples[i] - v
-		}
-	}
-
-	return output, nil
+	fmt.Printf("Output sample min: %v, max: %v\n", sl, sh)
 }
