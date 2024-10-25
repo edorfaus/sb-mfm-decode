@@ -85,14 +85,67 @@ func (e *EdgeDetect) nextFromNone() bool {
 		return false
 	}
 
-	// TODO: look backwards for the point where it started to rise
-	// (to match detection of zero-crossing, when that is added.)
-
 	if s[i] > noise {
 		e.CurType = EdgeToHigh
 	} else {
 		e.CurType = EdgeToLow
 	}
+
+	if i <= 0 {
+		// Immediate edge at the start of the data, so there's no better
+		// index to place it at.
+		return true
+	}
+
+	// There were within-noise samples before the peak, so look back to
+	// find a good spot to say that the edge happened.
+
+	// Do not go further back than the max crossing time, since we do
+	// not go further ahead than it on edges to none either.
+	from := i - e.MaxCrossingTime
+	// Also, do not go further back than the previous edge.
+	if from < e.PrevIndex {
+		from = e.PrevIndex
+	}
+
+	// First: use the noise-crossing values to extrapolate where a line
+	// that continues straight would cross zero.
+	// TODO: consider using a higher peak-relative (say 10%) noise level
+	// for this? But we'd have to support using that elsewhere too, and
+	// would need to look ahead to find the tip of this first peak.
+	lzc := i - 1 + int(0.5+intersectXAxis(s[i-1], s[i]))
+	// Clamp it to the valid area
+	if lzc > i {
+		lzc = i
+	}
+	if lzc < from {
+		lzc = from
+	}
+
+	// Next: in the area around that extrapolated zero-crossing, look
+	// for an actual zero-crossing, since the cleanup often makes one.
+	until := lzc - (i - lzc)
+	if until < from {
+		until = from
+	}
+	end := lzc
+	if e.CurType == EdgeToHigh {
+		for j := i - 1; j >= until; j-- {
+			if s[j] <= 0 {
+				end = j + 1
+				break
+			}
+		}
+	} else {
+		for j := i - 1; j >= until; j-- {
+			if s[j] >= 0 {
+				end = j + 1
+				break
+			}
+		}
+	}
+
+	e.CurIndex = end
 	return true
 }
 
