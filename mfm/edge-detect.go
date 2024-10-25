@@ -16,7 +16,6 @@ const (
 
 // TODO: on EdgeToNone, go back to 1st 0-pt: long tail edge = bad data
 
-// TODO: handle DC offsets
 // TODO: add minimum pulse length or something to avoid glitches?
 // TODO: add float interpolation of edge's zero crossing point?
 
@@ -120,7 +119,6 @@ func (e *EdgeDetect) nextFromLow() bool {
 		}
 	}
 
-	e.CurIndex = i
 	if i >= len(s) || t < 0 {
 		// No edge was found before the end, or there were too many
 		// consecutive within-noise samples, so this is an edge to none.
@@ -130,10 +128,15 @@ func (e *EdgeDetect) nextFromLow() bool {
 			// for the first nearest-0 point, to place the edge there.
 			// TODO: implement the above comment
 		}
+		e.CurIndex = i
 		return true
 	}
 
-	// TODO: look backwards for the point where it crosses zero
+	// Look backwards for the point where it crosses zero
+	for i--; s[i] > 0; {
+		i--
+	}
+	e.CurIndex = i + 1
 	e.CurType = EdgeToHigh
 	return true
 }
@@ -159,7 +162,6 @@ func (e *EdgeDetect) nextFromHigh() bool {
 		}
 	}
 
-	e.CurIndex = i
 	if i >= len(s) || t < 0 {
 		// No edge was found before the end, or there were too many
 		// consecutive within-noise samples, so this is an edge to none.
@@ -169,10 +171,15 @@ func (e *EdgeDetect) nextFromHigh() bool {
 			// for the first nearest-0 point, to place the edge there.
 			// TODO: implement the above comment
 		}
+		e.CurIndex = i
 		return true
 	}
 
-	// TODO: look backwards for the point where it crosses zero
+	// Look backwards for the point where it crosses zero
+	for i--; s[i] < 0; {
+		i--
+	}
+	e.CurIndex = i + 1
 	e.CurType = EdgeToLow
 	return true
 }
