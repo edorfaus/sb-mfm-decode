@@ -14,8 +14,6 @@ const (
 // that if the given samples have high or low values at either end, then
 // that end will be considered to be an edge.
 
-// TODO: on EdgeToNone, go back to 1st 0-pt: long tail edge = bad data
-
 // TODO: add minimum pulse length or something to avoid glitches?
 // TODO: add float interpolation of edge's zero crossing point?
 
@@ -102,42 +100,69 @@ func (e *EdgeDetect) nextFromNone() bool {
 func (e *EdgeDetect) nextFromLow() bool {
 	i, s, noise := e.CurIndex, e.Samples, e.NoiseFloor
 	maxTime := e.MaxCrossingTime
-	t := maxTime
 
 	// Look for the first non-noise sample on the other side of zero.
 	// Note that this ignores dips into noise that come back out on the
 	// same side as before, unless one is long enough to be EdgeToNone.
-	for i++; i < len(s) && s[i] <= noise; i++ {
-		// Check for too many consecutive within-noise samples.
+	ld := i
+	for i++; i < len(s) && s[i] <= noise && i-ld <= maxTime; i++ {
 		if s[i] < -noise {
-			t = maxTime
-		} else {
-			t--
-			if t < 0 {
-				break
-			}
+			ld = i
 		}
 	}
 
-	if i >= len(s) || t < 0 {
-		// No edge was found before the end, or there were too many
-		// consecutive within-noise samples, so this is an edge to none.
-		e.CurType = EdgeToNone
-		if t != maxTime {
-			// The previous sample was within the noise, so look back
-			// for the first nearest-0 point, to place the edge there.
-			// TODO: implement the above comment
+	if i < len(s) && s[i] > noise {
+		// We found an edge to high.
+		// Look backwards for the point where it crosses zero
+		for i--; s[i] > 0; {
+			i--
 		}
-		e.CurIndex = i
+		e.CurIndex = i + 1
+		e.CurType = EdgeToHigh
 		return true
 	}
 
-	// Look backwards for the point where it crosses zero
-	for i--; s[i] > 0; {
-		i--
+	// No edge was found before the end, or there were too many
+	// consecutive within-noise samples, so this is an edge to none.
+	e.CurType = EdgeToNone
+
+	if ld+1 >= len(s) {
+		// The last data was at the end, so the edge is at the end too.
+		e.CurIndex = len(s)
+		return true
 	}
-	e.CurIndex = i + 1
-	e.CurType = EdgeToHigh
+
+	// There were within-noise samples after the peak, so look back to
+	// find a good spot to say that the edge happened.
+
+	// First: use the noise-crossing values to extrapolate where a line
+	// that continues straight (instead of fading out) would cross zero.
+	// TODO: consider using a higher peak-relative (say 10%) noise level
+	// for this? But we'd have to support using it in nextFromNone too.
+	lzc := ld + int(0.5+intersectXAxis(s[ld], s[ld+1]))
+	// Clamp it to the valid area
+	if lzc > i {
+		lzc = i
+	}
+	if lzc < ld {
+		lzc = ld
+	}
+
+	// Next: in the area around that extrapolated zero-crossing, look
+	// for an actual zero-crossing, just in case there is one.
+	last := lzc + (lzc - ld)
+	if last > i {
+		last = i
+	}
+	end := lzc
+	for j := ld + 1; j < last; j++ {
+		if s[j] >= 0 {
+			end = j
+			break
+		}
+	}
+
+	e.CurIndex = end
 	return true
 }
 
@@ -145,43 +170,97 @@ func (e *EdgeDetect) nextFromLow() bool {
 func (e *EdgeDetect) nextFromHigh() bool {
 	i, s, noise := e.CurIndex, e.Samples, e.NoiseFloor
 	maxTime := e.MaxCrossingTime
-	t := maxTime
 
 	// Look for the first non-noise sample on the other side of zero.
 	// Note that this ignores dips into noise that come back out on the
 	// same side as before, unless one is long enough to be EdgeToNone.
-	for i++; i < len(s) && s[i] >= -noise; i++ {
-		// Check for too many consecutive within-noise samples.
+	ld := i
+	for i++; i < len(s) && s[i] >= -noise && i-ld <= maxTime; i++ {
 		if s[i] > noise {
-			t = maxTime
-		} else {
-			t--
-			if t < 0 {
-				break
-			}
+			ld = i
 		}
 	}
 
-	if i >= len(s) || t < 0 {
-		// No edge was found before the end, or there were too many
-		// consecutive within-noise samples, so this is an edge to none.
-		e.CurType = EdgeToNone
-		if t != maxTime {
-			// The previous sample was within the noise, so look back
-			// for the first nearest-0 point, to place the edge there.
-			// TODO: implement the above comment
+	if i < len(s) && s[i] < -noise {
+		// We found an edge to low.
+		// Look backwards for the point where it crosses zero.
+		for i--; s[i] < 0; {
+			i--
 		}
-		e.CurIndex = i
+		e.CurIndex = i + 1
+		e.CurType = EdgeToLow
 		return true
 	}
 
-	// Look backwards for the point where it crosses zero
-	for i--; s[i] < 0; {
-		i--
+	// No edge was found before the end, or there were too many
+	// consecutive within-noise samples, so this is an edge to none.
+	e.CurType = EdgeToNone
+
+	if ld+1 >= len(s) {
+		// The last data was at the end, so the edge is at the end too.
+		e.CurIndex = len(s)
+		return true
 	}
-	e.CurIndex = i + 1
-	e.CurType = EdgeToLow
+
+	// There were within-noise samples after the peak, so look back to
+	// find a good spot to say that the edge happened.
+
+	// First: use the noise-crossing values to extrapolate where a line
+	// that continues straight (instead of fading out) would cross zero.
+	// TODO: consider using a higher peak-relative (say 10%) noise level
+	// for this? But we'd have to support using it in nextFromNone too.
+	lzc := ld + int(0.5+intersectXAxis(s[ld], s[ld+1]))
+	// Clamp it to the valid area
+	if lzc > i {
+		lzc = i
+	}
+	if lzc < ld {
+		lzc = ld
+	}
+
+	// Next: in the area around that extrapolated zero-crossing, look
+	// for an actual zero-crossing, just in case there is one.
+	last := lzc + (lzc - ld)
+	if last > i {
+		last = i
+	}
+	end := lzc
+	for j := ld + 1; j < last; j++ {
+		// For this, we consider exactly zero to be a crossing point.
+		if s[j] <= 0 {
+			end = j
+			break
+		}
+	}
+
+	e.CurIndex = end
 	return true
+}
+
+// intersectXAxis calculates where the given line intersects the X axis.
+// The line is given as the Y values of two points that are assumed to
+// be 1 unit apart along the X axis. The returned value is the distance
+// along the X axis to the intersection point from the first point.
+func intersectXAxis(y1, y2 int) float64 {
+	// Line 1: given: from x1,y1 to x2,y2 (where x2 = x1 + 1)
+	// Line 2: X axis: from x3,y3 = -inf,0 to x4,y4 = inf,0
+	// To simplify, since we know what the second line is, we eliminate
+	// x1 from line 1, and define line 2 with x3 = 0 and x4 = 1 instead.
+	// This gives us x1 = x3 = y3 = y4 = 0 and x2 = x4 = 1.
+	// We know that the intersection must happen at Y=0, so we only need
+	// to find the X coordinate. Using the determinants, we have that:
+	// X = (x1*y2-y1*x2)*(x3-x4) - (x1-x2)*(x3*y4-y3*x4)
+	//  all over (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4)
+	// Inserting the known values:
+	// X = (0*y2-y1*1)*(0-1) - (0-1)*(0*0-0*1)
+	//  all over (0-1)*(0-0) - (y1-y2)*(0-1)
+	// Simplifying the constants:
+	// X = ( ((0 - y1)*-1) - (-1*(0 - 0)) ) / ( (-1*0) - (y1 - y2)*-1 )
+	// X = ( (-y1 * -1) - 0 ) / ( 0 - -1 * (y1 - y2) )
+	// X = ( -y1 * -1 ) / ( 0 - -(y1 - y2) )
+	// X = ( y1 * 1 ) / ( 0 + (y1 - y2) ) = y1 / ( y1 - y2 )
+
+	return float64(y1) / float64(y1-y2)
 }
 
 func (t EdgeType) String() string {
