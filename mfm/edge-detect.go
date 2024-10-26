@@ -15,7 +15,6 @@ const (
 // that end will be considered to be an edge.
 
 // TODO: add minimum pulse length or something to avoid glitches?
-// TODO: add float interpolation of edge's zero crossing point?
 
 type EdgeDetect struct {
 	// The list of samples that this edge detector is finding edges in.
@@ -33,10 +32,14 @@ type EdgeDetect struct {
 	// The index (in samples) and type of the current edge.
 	CurIndex int
 	CurType  EdgeType
+	// The interpolated sample offset of the current edge.
+	CurZero float64
 
 	// The index (in samples) and type of the previous edge.
 	PrevIndex int
 	PrevType  EdgeType
+	// The interpolated sample offset of the previous edge.
+	PrevZero float64
 }
 
 func NewEdgeDetect(samples []int, noiseFloor int) *EdgeDetect {
@@ -48,6 +51,7 @@ func NewEdgeDetect(samples []int, noiseFloor int) *EdgeDetect {
 
 func (e *EdgeDetect) Next() bool {
 	e.PrevIndex, e.PrevType = e.CurIndex, e.CurType
+	e.PrevZero = e.CurZero
 
 	if e.CurIndex >= len(e.Samples) {
 		// We are already past the end of the data, so there are no more
@@ -82,6 +86,7 @@ func (e *EdgeDetect) nextFromNone() bool {
 	e.CurIndex = i
 	if i >= len(s) {
 		e.CurType = EdgeToNone
+		e.CurZero = float64(i)
 		return false
 	}
 
@@ -94,6 +99,7 @@ func (e *EdgeDetect) nextFromNone() bool {
 	if i <= 0 {
 		// Immediate edge at the start of the data, so there's no better
 		// index to place it at.
+		e.CurZero = float64(i)
 		return true
 	}
 
@@ -113,26 +119,28 @@ func (e *EdgeDetect) nextFromNone() bool {
 	// TODO: consider using a higher peak-relative (say 10%) noise level
 	// for this? But we'd have to support using that elsewhere too, and
 	// would need to look ahead to find the tip of this first peak.
-	lzc := i - 1 + int(0.5+intersectXAxis(s[i-1], s[i]))
+	zc := float64(i) - 1 + intersectXAxis(s[i-1], s[i])
 	// Clamp it to the valid area
-	if lzc > i {
-		lzc = i
+	if zc > float64(i) {
+		zc = float64(i)
 	}
-	if lzc < from {
-		lzc = from
+	if zc < float64(from) {
+		zc = float64(from)
 	}
+
+	end := int(0.5 + zc)
 
 	// Next: in the area around that extrapolated zero-crossing, look
 	// for an actual zero-crossing, since the cleanup often makes one.
-	until := lzc - (i - lzc)
+	until := end - (i - end)
 	if until < from {
 		until = from
 	}
-	end := lzc
 	if e.CurType == EdgeToHigh {
 		for j := i - 1; j >= until; j-- {
 			if s[j] <= 0 {
 				end = j + 1
+				zc = float64(j) + intersectXAxis(s[j], s[j+1])
 				break
 			}
 		}
@@ -140,12 +148,14 @@ func (e *EdgeDetect) nextFromNone() bool {
 		for j := i - 1; j >= until; j-- {
 			if s[j] >= 0 {
 				end = j + 1
+				zc = float64(j) + intersectXAxis(s[j], s[j+1])
 				break
 			}
 		}
 	}
 
 	e.CurIndex = end
+	e.CurZero = zc
 	return true
 }
 
@@ -172,6 +182,7 @@ func (e *EdgeDetect) nextFromLow() bool {
 		}
 		e.CurIndex = i + 1
 		e.CurType = EdgeToHigh
+		e.CurZero = float64(i) + intersectXAxis(s[i], s[i+1])
 		return true
 	}
 
@@ -182,6 +193,7 @@ func (e *EdgeDetect) nextFromLow() bool {
 	if ld+1 >= len(s) {
 		// The last data was at the end, so the edge is at the end too.
 		e.CurIndex = len(s)
+		e.CurZero = float64(len(s))
 		return true
 	}
 
@@ -192,30 +204,33 @@ func (e *EdgeDetect) nextFromLow() bool {
 	// that continues straight (instead of fading out) would cross zero.
 	// TODO: consider using a higher peak-relative (say 10%) noise level
 	// for this? But we'd have to support using it in nextFromNone too.
-	lzc := ld + int(0.5+intersectXAxis(s[ld], s[ld+1]))
+	zc := float64(ld) + intersectXAxis(s[ld], s[ld+1])
 	// Clamp it to the valid area
-	if lzc > i {
-		lzc = i
+	if zc > float64(i) {
+		zc = float64(i)
 	}
-	if lzc < ld {
-		lzc = ld
+	if zc < float64(ld) {
+		zc = float64(ld)
 	}
+
+	end := int(0.5 + zc)
 
 	// Next: in the area around that extrapolated zero-crossing, look
 	// for an actual zero-crossing, just in case there is one.
-	last := lzc + (lzc - ld)
+	last := end + (end - ld)
 	if last > i {
 		last = i
 	}
-	end := lzc
 	for j := ld + 1; j < last; j++ {
 		if s[j] >= 0 {
 			end = j
+			zc = float64(j) - 1 + intersectXAxis(s[j-1], s[j])
 			break
 		}
 	}
 
 	e.CurIndex = end
+	e.CurZero = zc
 	return true
 }
 
@@ -242,6 +257,7 @@ func (e *EdgeDetect) nextFromHigh() bool {
 		}
 		e.CurIndex = i + 1
 		e.CurType = EdgeToLow
+		e.CurZero = float64(i) + intersectXAxis(s[i], s[i+1])
 		return true
 	}
 
@@ -252,6 +268,7 @@ func (e *EdgeDetect) nextFromHigh() bool {
 	if ld+1 >= len(s) {
 		// The last data was at the end, so the edge is at the end too.
 		e.CurIndex = len(s)
+		e.CurZero = float64(len(s))
 		return true
 	}
 
@@ -262,31 +279,34 @@ func (e *EdgeDetect) nextFromHigh() bool {
 	// that continues straight (instead of fading out) would cross zero.
 	// TODO: consider using a higher peak-relative (say 10%) noise level
 	// for this? But we'd have to support using it in nextFromNone too.
-	lzc := ld + int(0.5+intersectXAxis(s[ld], s[ld+1]))
+	zc := float64(ld) + intersectXAxis(s[ld], s[ld+1])
 	// Clamp it to the valid area
-	if lzc > i {
-		lzc = i
+	if zc > float64(i) {
+		zc = float64(i)
 	}
-	if lzc < ld {
-		lzc = ld
+	if zc < float64(ld) {
+		zc = float64(ld)
 	}
+
+	end := int(0.5 + zc)
 
 	// Next: in the area around that extrapolated zero-crossing, look
 	// for an actual zero-crossing, just in case there is one.
-	last := lzc + (lzc - ld)
+	last := end + (end - ld)
 	if last > i {
 		last = i
 	}
-	end := lzc
 	for j := ld + 1; j < last; j++ {
 		// For this, we consider exactly zero to be a crossing point.
 		if s[j] <= 0 {
 			end = j
+			zc = float64(j) - 1 + intersectXAxis(s[j-1], s[j])
 			break
 		}
 	}
 
 	e.CurIndex = end
+	e.CurZero = zc
 	return true
 }
 
