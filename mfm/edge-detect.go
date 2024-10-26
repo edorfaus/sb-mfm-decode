@@ -103,9 +103,9 @@ func (e *EdgeDetect) nextFromNone() bool {
 	// Do not go further back than the max crossing time, since we do
 	// not go further ahead than it on edges to none either.
 	from := i - e.MaxCrossingTime
-	// Also, do not go further back than the previous edge.
-	if from < e.PrevIndex {
-		from = e.PrevIndex
+	// Also, do not go all the way back to the previous edge.
+	if from <= e.PrevIndex {
+		from = e.PrevIndex + 1
 	}
 
 	// First: use the noise-crossing values to extrapolate where a line
