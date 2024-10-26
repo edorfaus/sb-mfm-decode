@@ -132,7 +132,7 @@ func (c *PulseClassifier) SetBitWidth(bitWidth float64) {
 
 func (c *PulseClassifier) updateCrossingTime(bitWidth float64) {
 	// TODO: figure out what would be a good value for this
-	c.Edges.MaxCrossingTime = int(bitWidth/2 + 0.5)
+	c.Edges.MaxCrossingTime = int(bitWidth + 0.5)
 }
 
 // peekAtLeadIn is called when the BitWidth is 0, to peek ahead at the

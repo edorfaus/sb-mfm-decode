@@ -43,7 +43,7 @@ func (d *Decoder) SetBitWidth(bitWidth int) {
 	// If so, we might need another float field for current position.
 	d.BitWidth = bitWidth
 	// TODO: figure out what would be a good value for this
-	d.Edge.MaxCrossingTime = bitWidth / 2
+	d.Edge.MaxCrossingTime = bitWidth
 }
 
 func (d *Decoder) NextBlock() error {
