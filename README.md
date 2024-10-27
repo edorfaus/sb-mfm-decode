@@ -33,6 +33,10 @@ future, as they are not meant to be a final product of this project.
 	where in the input the edge detector sees the edges. It can also
 	(optionally) output some statistics on the durations between the
 	detected edges, both separated by type (high/low/none) and combined.
+- `cmd/zc-edges.go` : This takes an input WAVE file, runs the edge
+	detector on it, and using the interpolated zero crossings,
+	optionally outputs a listing of the detected edges, and/or some
+	statistics on the durations between the edges, to separate files.
 - `cmd/classify.go` : This takes an input WAVE file, runs the edge
 	detector and the pulse classifier on it, and outputs the results to
 	a text file.
