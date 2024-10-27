@@ -144,7 +144,7 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 
 	needNL := false
 	if args.All {
-		ssz := max(5, len(fmt.Sprint(len(samples))))
+		ssz := max(5, len(fmt.Sprint(len(samples)))+1+3)
 		psz := max(5, len(fmt.Sprint(len(samples)/2)))
 		fmt.Fprintf(
 			out, "%-*s Kind %-*s %-*s %-*s BitWidth\n",
@@ -155,9 +155,9 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 			pulseCounts[pc.Class]++
 
 			fmt.Fprintf(
-				out, "%*v %s:%s%s %*v %*v %*v %8.4f\n",
+				out, "%*v %s:%s%s %*.3f %*.3f %*.3f %8.4f\n",
 				psz, i, pc.Class, pc.Edges.PrevType, pc.Edges.CurType,
-				ssz, pc.Edges.PrevIndex, ssz, pc.Edges.CurIndex,
+				ssz, pc.Edges.PrevZero, ssz, pc.Edges.CurZero,
 				ssz, pc.Width, pc.BitWidth,
 			)
 		}
@@ -175,10 +175,10 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 				}
 				fmt.Fprintf(
 					out,
-					"-- Class:%s Type:%v-%v From:%v To:%v Width:%v"+
-						" BitWidth:%v\n",
+					"-- Class:%s Type:%v-%v From:%.3f To:%.3f"+
+						" Width:%.3f BitWidth:%.4f\n",
 					pc.Class, pc.Edges.PrevType, pc.Edges.CurType,
-					pc.Edges.PrevIndex, pc.Edges.CurIndex,
+					pc.Edges.PrevZero, pc.Edges.CurZero,
 					pc.Width, pc.BitWidth,
 				)
 			}

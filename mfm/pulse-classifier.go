@@ -29,7 +29,7 @@ type PulseClassifier struct {
 	Class PulseClass
 
 	// The width in samples of the current pulse.
-	Width int
+	Width float64
 }
 
 func NewPulseClassifier(ed *EdgeDetect) *PulseClassifier {
@@ -43,7 +43,7 @@ func (c *PulseClassifier) Next() bool {
 		return false
 	}
 
-	c.Width = c.Edges.CurIndex - c.Edges.PrevIndex
+	c.Width = c.Edges.CurZero - c.Edges.PrevZero
 
 	if c.BitWidth == 0 {
 		// When the bit width is not set, the data must start with a
@@ -78,9 +78,9 @@ func (c *PulseClassifier) Next() bool {
 	// and at   (w*4/2+w*5/2)/2 = w*(4/2+5/2)/2 = w*(9/2)/2 = w*9/4
 	//
 	// For comparisons, we use the fact that t < w*a/b => t*b < w*a
-	// (given b>0) to avoid the precision loss of the integer division.
+	// (given b>0) to avoid needing to do divisions.
 
-	pulseWidth, bitWidth := float64(c.Width), c.BitWidth
+	pulseWidth, bitWidth := c.Width, c.BitWidth
 
 	switch {
 	case pulseWidth*4 < bitWidth*3:
@@ -163,7 +163,7 @@ func (c *PulseClassifier) peekAtLeadIn() bool {
 
 		// Since the max crossing time might be wrong, use this pulse to
 		// set it and then re-do the edge, in case its width changes.
-		width := float64(c.Edges.CurIndex - c.Edges.PrevIndex)
+		width := c.Edges.CurZero - c.Edges.PrevZero
 
 		*c.Edges = edgesBackup
 		c.updateCrossingTime(width)
@@ -186,7 +186,7 @@ func (c *PulseClassifier) peekAtLeadIn() bool {
 			return false
 		}
 
-		width := float64(c.Edges.CurIndex - c.Edges.PrevIndex)
+		width := c.Edges.CurZero - c.Edges.PrevZero
 
 		total += width
 		count++
