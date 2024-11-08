@@ -43,3 +43,7 @@ future, as they are not meant to be a final product of this project.
 - `cmd/mfm-decode.go` : This is the oldest, and currently least useful,
 	test program. It does not take input, uses stdout for results, and
 	uses some old decoder code that needs significant changes.
+- `cmd/wav-slope.go` : This takes an input WAVE file, calculates the
+	instantaneous slope of the waveform at each sample, and outputs a
+	new WAVE file with the result. Each sample of the output is the
+	slope from the previous input sample to that input sample.
