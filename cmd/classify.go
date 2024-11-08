@@ -142,6 +142,8 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 	// For statistics
 	pulseCounts := map[mfm.PulseClass]int{}
 
+	bwL, bwH := pc.BitWidth, pc.BitWidth
+
 	needNL := false
 	if args.All {
 		ssz := max(5, len(fmt.Sprint(len(samples)))+1+3)
@@ -154,6 +156,14 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 		for i := 0; pc.Next(); i++ {
 			pulseCounts[pc.Class]++
 
+			bw := pc.BitWidth
+			if bw < bwL || bwL == 0 {
+				bwL = bw
+			}
+			if bw > bwH {
+				bwH = bw
+			}
+
 			fmt.Fprintf(
 				out, "%*v %s:%s%s %*.3f %*.3f %*.3f %8.4f\n",
 				psz, i, pc.Class, pc.Edges.PrevType, pc.Edges.CurType,
@@ -164,6 +174,14 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 	} else {
 		for pc.Next() {
 			pulseCounts[pc.Class]++
+
+			bw := pc.BitWidth
+			if bw < bwL || bwL == 0 {
+				bwL = bw
+			}
+			if bw > bwH {
+				bwH = bw
+			}
 
 			if pc.Class.Valid() && !pc.TouchesNone() {
 				out.WriteString(pc.Class.String())
@@ -197,6 +215,7 @@ func classify(samples []int, rate, bits int, out *bufio.Writer) error {
 		pulses += v
 	}
 	log.Ln(2, "  pulses found:", pulses, ":", pulseCounts)
+	log.F(2, "  bit width min: %.4f max %.4f\n", bwL, bwH)
 
 	return nil
 }
