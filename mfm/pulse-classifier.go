@@ -30,11 +30,22 @@ type PulseClassifier struct {
 
 	// The width in samples of the current pulse.
 	Width float64
+
+	// List of bit recent widths, used to calculate the current width.
+	BitWidths []float64
+
+	// The index into BitWidths that we are overwriting next.
+	BWIndex int
+
+	// The sum of the values currently in the BitWidths slice.
+	BWTotal float64
 }
 
 func NewPulseClassifier(ed *EdgeDetect) *PulseClassifier {
 	return &PulseClassifier{
 		Edges: ed,
+
+		BitWidths: make([]float64, 0, 16),
 	}
 }
 
@@ -89,15 +100,15 @@ func (c *PulseClassifier) Next() bool {
 	case pulseWidth*4 < bitWidth*5:
 		// 2 half-bit widths
 		c.Class = PulseShort
-		c.SetBitWidth(pulseWidth)
+		c.addBitWidth(pulseWidth)
 	case pulseWidth*4 < bitWidth*7:
 		// 3 half-bit widths
 		c.Class = PulseMedium
-		c.SetBitWidth(pulseWidth * 2 / 3)
+		c.addBitWidth(pulseWidth * 2 / 3)
 	case pulseWidth*4 < bitWidth*9:
 		// 4 half-bit widths
 		c.Class = PulseLong
-		c.SetBitWidth(pulseWidth / 2)
+		c.addBitWidth(pulseWidth / 2)
 	default:
 		// more than 4 half-bit widths
 		c.Class = PulseHuge
@@ -122,11 +133,36 @@ func (c *PulseClassifier) SetBitWidth(bitWidth float64) {
 	if bitWidth < 2 {
 		panic(fmt.Errorf("invalid bit width: %v", bitWidth))
 	}
-	// TODO: should we use a weighted average of recent bit widths?
-	if c.BitWidth != 0 {
-		bitWidth = (c.BitWidth + bitWidth) / 2
+
+	// Reset the bit widths slice, and override it with the given value.
+	c.BitWidths = c.BitWidths[:cap(c.BitWidths)]
+	for i := 0; i < len(c.BitWidths); i++ {
+		c.BitWidths[i] = bitWidth
 	}
+	c.BWTotal = bitWidth * float64(len(c.BitWidths))
+	c.BWIndex = 0
+
 	c.BitWidth = bitWidth
+
+	c.updateCrossingTime(bitWidth)
+}
+
+func (c *PulseClassifier) addBitWidth(bitWidth float64) {
+	bws := c.BitWidths
+	if len(bws) < cap(bws) {
+		c.BWTotal += bitWidth
+		c.BitWidths = append(bws, bitWidth)
+	} else {
+		c.BWTotal = c.BWTotal - bws[c.BWIndex] + bitWidth
+		bws[c.BWIndex] = bitWidth
+		c.BWIndex++
+		if c.BWIndex >= len(bws) {
+			c.BWIndex = 0
+		}
+	}
+
+	c.BitWidth = c.BWTotal / float64(len(c.BitWidths))
+
 	c.updateCrossingTime(bitWidth)
 }
 
@@ -176,6 +212,9 @@ func (c *PulseClassifier) peekAtLeadIn() bool {
 	// We want to look at more than one pulse, since some of the early
 	// ones are often distorted and the timing is often a fractional
 	// number of samples.
+
+	// TODO: adjust this to make use of the BitWidths functionality, and
+	// to keep more than just the final average value.
 
 	total := 0.0
 	count := 0
