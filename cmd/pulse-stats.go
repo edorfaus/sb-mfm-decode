@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/alexflint/go-arg"
@@ -24,9 +26,7 @@ func main() {
 
 var args = struct {
 	Input  string `arg:"positional,required" help:"input wav file"`
-	Output string `arg:"positional" help:"output text file [out.txt]"`
-	// TODO: remove default value text from above help text, when go-arg
-	// is updated to a newer version with the fix for auto-printing it.
+	Output string `arg:"positional" help:"output text file"`
 
 	LogLevel int  `help:"set the logging level (verbosity)"`
 	NoClean  bool `help:"do not clean the input signal first"`
@@ -35,7 +35,6 @@ var args = struct {
 
 	BitWidth float64 `help:"base bit width; 0=by sample rate, -1=none"`
 }{
-	Output:     "out.txt",
 	LogLevel:   log.Level,
 	NoiseFloor: -1,
 }
@@ -67,7 +66,7 @@ func run() (retErr error) {
 	}
 
 	var out *bufio.Writer
-	if args.Output == "-" {
+	if args.Output == "" || args.Output == "-" {
 		out = bufio.NewWriter(os.Stdout)
 	} else {
 		f, err := os.Create(args.Output)
@@ -147,8 +146,13 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 
 	var overall Stats
 
-	prevClass := mfm.PulseUnknown
-	prevWidth := 0.0
+	if !pc.Next() {
+		return fmt.Errorf("no pulses were found")
+	}
+	bwStats.Add(pc.BitWidth)
+	overall.Add(pc.Width)
+
+	prevClass, prevWidth := pc.Class, pc.Width
 
 	for pc.Next() {
 		bwStats.Add(pc.BitWidth)
@@ -164,58 +168,60 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 		prevClass, prevWidth = pc.Class, pc.Width
 	}
 
+	// Stats generated, now format and output them.
+
 	keys := make([][2]mfm.PulseClass, 0, len(pulseStats))
-	maxCount := 0
+
+	c := NewColumnar(
+		out,
+		"%*s-%*s: %*d ; %*.3f - %*.3f, %*.3f ; %*.3f - %*.3f, %*.3f\n",
+	)
+
 	for k, v := range pulseStats {
 		keys = append(keys, k)
 		// v[0].Count == v[1].Count unless something is very wrong.
-		if c := v[0].Count; c > maxCount {
-			maxCount = c
-		}
+		c.Values(
+			"", "", v[0].Count,
+			v[0].Min, v[0].Max, v[0].Avg(),
+			v[1].Min, v[1].Max, v[1].Avg(),
+		)
 	}
 
 	sort.Slice(keys, func(i, j int) bool {
 		a, b := keys[i], keys[j]
-		if a[0] != b[0] {
-			return a[0] < b[0]
+		if a[1] != b[1] {
+			return a[1] < b[1]
 		}
-		return a[1] < b[1]
+		return a[0] < b[0]
 	})
 
-	csz := len(fmt.Sprint(maxCount))
-	if sz := len("count"); sz > csz {
-		csz = sz
-	}
-	vsz := len(fmt.Sprintf("%.3f", overall.Max))
-
-	fmt.Fprintf(
-		out,
-		" - : %*v ; %*v,%-*v - %*v,%-*v ; %*v,%-*v\n",
-		csz, "count", vsz, "minA", vsz, "minB", vsz, "maxA",
-		vsz, "maxB", vsz, "avgA", vsz, "avgB",
+	c.Headers(
+		"a", "b", "count",
+		"A: min", "max", "avg",
+		"B: min", "max", "avg",
 	)
 
 	for _, k := range keys {
 		v := pulseStats[k]
-		fmt.Fprintf(
-			out,
-			"%v-%v: %*v ; %*.3f,%*.3f - %*.3f,%*.3f ; %*.3f,%*.3f\n",
-			k[0], k[1], csz, v[0].Count,
-			vsz, v[0].Min, vsz, v[1].Min,
-			vsz, v[0].Max, vsz, v[1].Max,
-			vsz, v[0].Avg(), vsz, v[1].Avg(),
+		c.OutValues(
+			k[0], k[1], v[0].Count,
+			v[0].Min, v[0].Max, v[0].Avg(),
+			v[1].Min, v[1].Max, v[1].Avg(),
 		)
 	}
 
-	fmt.Fprintf(
-		out, "\noverall: %v ; %.3f - %.3f ; %.3f\n",
-		overall.Count, overall.Min, overall.Max, overall.Avg(),
-	)
+	out.WriteByte('\n')
 
-	fmt.Fprintf(
-		out, "\nbit width: %v ; %.3f - %.3f ; %.3f\n",
-		bwStats.Count, bwStats.Min, bwStats.Max, bwStats.Avg(),
-	)
+	c = NewColumnar(out, "%*s: %*d ; %*.3f - %*.3f, %*.3f\n")
+	v := overall
+	c.Values("all pulses", v.Count, v.Min, v.Max, v.Avg())
+	v = bwStats
+	c.Values("bit widths", v.Count, v.Min, v.Max, v.Avg())
+
+	v = overall
+	c.OutValues("all pulses", v.Count, v.Min, v.Max, v.Avg())
+	v = bwStats
+	c.OutValues("bit widths", v.Count, v.Min, v.Max, v.Avg())
 
 	if err := out.Flush(); err != nil {
 		return err
@@ -247,4 +253,81 @@ func (s *Stats) Add(v float64) {
 
 func (s *Stats) Avg() float64 {
 	return s.Tot / float64(s.Count)
+}
+
+type Columnar struct {
+	Output *bufio.Writer
+	Format []string
+	OutFmt []string
+	Prefix []string
+	Suffix string
+	Size   []int
+}
+
+func NewColumnar(out *bufio.Writer, formatString string) *Columnar {
+	re := regexp.MustCompile("%[^%a-zA-Z]*[%a-zA-Z]")
+	m := re.FindAllStringIndex(formatString, -1)
+
+	format := make([]string, 0, len(m))
+	outFmt := make([]string, 0, len(format))
+	prefix := make([]string, 0, len(format))
+	from := 0
+	for _, loc := range m {
+		if formatString[loc[1]-1] == '%' {
+			// This was a %% so keep going
+			continue
+		}
+
+		fmtStr := formatString[loc[0]:loc[1]]
+		format = append(format, strings.ReplaceAll(fmtStr, "*", ""))
+		outFmt = append(outFmt, fmtStr)
+		prefix = append(prefix, fmt.Sprintf(formatString[from:loc[0]]))
+
+		from = loc[1]
+	}
+	suffix := fmt.Sprintf(formatString[from:])
+
+	return &Columnar{
+		Output: out,
+		Format: format,
+		OutFmt: outFmt,
+		Prefix: prefix,
+		Suffix: suffix,
+		Size:   make([]int, len(format)),
+	}
+}
+
+func (c *Columnar) Values(vals ...any) {
+	f, sz := c.Format, c.Size
+	for i, v := range vals {
+		if s := len(fmt.Sprintf(f[i], v)); s > sz[i] {
+			sz[i] = s
+		}
+	}
+}
+
+func (c *Columnar) Headers(hdr ...string) {
+	out, p, sz := c.Output, c.Prefix, c.Size
+	if len(hdr) != len(p) {
+		panic(fmt.Errorf(
+			"bad header count: is %v, expected %v", len(hdr), len(p),
+		))
+	}
+	for i, v := range hdr {
+		if s := len(v); s > sz[i] {
+			sz[i] = s
+		}
+		out.WriteString(p[i])
+		fmt.Fprintf(out, "%*s", sz[i], v)
+	}
+	out.WriteString(c.Suffix)
+}
+
+func (c *Columnar) OutValues(vals ...any) {
+	out, f, p, sz := c.Output, c.OutFmt, c.Prefix, c.Size
+	for i, v := range vals {
+		out.WriteString(p[i])
+		fmt.Fprintf(out, f[i], sz[i], v)
+	}
+	out.WriteString(c.Suffix)
 }
