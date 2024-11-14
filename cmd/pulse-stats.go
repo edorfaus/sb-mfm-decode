@@ -142,7 +142,8 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 		bwStats.Add(pc.BitWidth)
 	}
 
-	pulseStats := map[[2]mfm.PulseClass][2]Stats{}
+	// 0:first pulse, 1:second pulse, 2:difference (1-0)
+	pulseStats := map[[2]mfm.PulseClass][3]Stats{}
 
 	var overall Stats
 
@@ -161,6 +162,7 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 		s := pulseStats[key]
 		s[0].Add(prevWidth)
 		s[1].Add(pc.Width)
+		s[2].Add(pc.Width - prevWidth)
 		pulseStats[key] = s
 
 		overall.Add(pc.Width)
@@ -174,7 +176,8 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 
 	c := NewColumnar(
 		out,
-		"%*s-%*s: %*d ; %*.3f - %*.3f, %*.3f ; %*.3f - %*.3f, %*.3f\n",
+		"%*s-%*s: %*d ; %*.3f - %*.3f, %*.3f ; %*.3f - %*.3f, %*.3f"+
+			" ; %*.3f - %*.3f, %*.3f\n",
 	)
 
 	for k, v := range pulseStats {
@@ -184,21 +187,25 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 			"", "", v[0].Count,
 			v[0].Min, v[0].Max, v[0].Avg(),
 			v[1].Min, v[1].Max, v[1].Avg(),
+			v[2].Min, v[2].Max, v[2].Avg(),
 		)
 	}
 
+	const first = 1
+	const second = 1 - first
 	sort.Slice(keys, func(i, j int) bool {
 		a, b := keys[i], keys[j]
-		if a[1] != b[1] {
-			return a[1] < b[1]
+		if a[first] != b[first] {
+			return a[first] < b[first]
 		}
-		return a[0] < b[0]
+		return a[second] < b[second]
 	})
 
 	c.Headers(
 		"a", "b", "count",
 		"A: min", "max", "avg",
 		"B: min", "max", "avg",
+		"B-A: min", "max", "avg",
 	)
 
 	for _, k := range keys {
@@ -207,6 +214,7 @@ func runStats(samples []int, rate, bits int, out *bufio.Writer) error {
 			k[0], k[1], v[0].Count,
 			v[0].Min, v[0].Max, v[0].Avg(),
 			v[1].Min, v[1].Max, v[1].Avg(),
+			v[2].Min, v[2].Max, v[2].Avg(),
 		)
 	}
 
